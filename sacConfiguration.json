@@ -1,0 +1,34 @@
+{
+    "General": {
+        "debug": false
+    },
+    "Environment": {
+        "state_dim": 8,
+        "action_dim": 2,
+        "time_increment": 60
+    },
+    "Architecture": {
+        "d_model": 32,
+        "max_len": 50,
+        "pos_dropout": 0.1,
+        "nhead": 8,
+        "num_encoder_layers": 1,
+        "num_decoder_layers": 1,
+        "dim_feedforward": 2048,
+        "transformer_dropout": 0.1,
+        "activation": "relu",
+        "batch_first": true
+    },
+    "Soft Actor-Critic": {
+        "iterations": 5,
+        "environment_steps": 5,
+        "gradient_steps": 10,
+        "epsilon": 1e-7,
+        "lambda_v": 0.5,
+        "lambda_q": 0.5,
+        "lambda_pi": 0.5,
+        "tau": 0.001,
+        "discount": 0.99,
+        "temperature": 1.0
+    }
+}
