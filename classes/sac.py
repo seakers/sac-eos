@@ -183,7 +183,7 @@ class SoftActorCritic():
         v = VNetwork(self.state_dim, 1)
         vtg = VNetwork(self.state_dim, 1)
 
-        # Initial data for the state
+        # Sending data to get the initial state
         sending_data = {
             "agent_id": 0,
             "action": {
@@ -233,6 +233,9 @@ class SoftActorCritic():
                     # Select the last state
                     s = states[-1, -1, :]
 
+                    # Select the last action
+                    prev_tanh_a = actions[-1, -1, :]
+
                     # Select the last stochastic action
                     a_sto = stochastic_actions[-1, -1, :]
 
@@ -243,8 +246,8 @@ class SoftActorCritic():
                     sending_data = {
                         "agent_id": 0,
                         "action": {
-                            "d_az": 10*torch.atanh(tanh_a[0] - self.epsilon).item(),
-                            "d_el": 10*torch.atanh(tanh_a[1] - self.epsilon).item()
+                            "d_az": (tanh_a[0].item() + 1) * 180,
+                            "d_el": tanh_a[1].item() * 90
                         },
                         "delta_time": self.time_increment
                     }
@@ -264,7 +267,7 @@ class SoftActorCritic():
                     # --------------- Environment's job to provide info ---------------
 
                     # Store in the buffer
-                    replay_buffer.add((s, tanh_a, r, s_next))
+                    replay_buffer.add((s, prev_tanh_a, tanh_a, r, s_next))
 
                     # Add it to the states
                     states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
@@ -283,7 +286,7 @@ class SoftActorCritic():
             # Loop over all gradient steps
             for g in range(self.gradient_steps):
                 with torch.no_grad():
-                    s, prev_tanh_a, r, s_next = tensor_manager.full_squeeze(*replay_buffer.sample(1))
+                    s, prev_tanh_a, current_tanh_a, r, s_next = tensor_manager.full_squeeze(*replay_buffer.sample(1))
 
                 stochastic_actions = actor(s, prev_tanh_a)
 
@@ -333,8 +336,8 @@ class SoftActorCritic():
 
                 # Compute the losses
                 J_v = 0.5 * F.mse_loss(v(s), target_v)
-                J_q1 = 0.5 * F.mse_loss(q1(s, prev_tanh_a), target_q)
-                J_q2 = 0.5 * F.mse_loss(q2(s, prev_tanh_a), target_q)
+                J_q1 = 0.5 * F.mse_loss(q1(s, current_tanh_a), target_q)
+                J_q2 = 0.5 * F.mse_loss(q2(s, current_tanh_a), target_q)
                 J_pi = self.temperature * log_prob - qmin
 
                 # Backpropagate

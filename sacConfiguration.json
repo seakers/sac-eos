@@ -23,7 +23,6 @@
         "iterations": 5,
         "environment_steps": 5,
         "gradient_steps": 10,
-        "epsilon": 1e-7,
         "lambda_v": 0.5,
         "lambda_q": 0.5,
         "lambda_pi": 0.5,
