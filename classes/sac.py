@@ -246,7 +246,7 @@ class SoftActorCritic():
                     sending_data = {
                         "agent_id": 0,
                         "action": {
-                            "d_az": (tanh_a[0].item() + 1) * 180,
+                            "d_az": tanh_a[0].item() * 180,
                             "d_el": tanh_a[1].item() * 90
                         },
                         "delta_time": self.time_increment
