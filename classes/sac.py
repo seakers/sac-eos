@@ -227,6 +227,10 @@ class SoftActorCritic():
             # Loop over all environment steps
             for e in range(self.environment_steps):
                 with torch.no_grad():
+                    # Adjust the maximum length of the states and actions
+                    states = states[:, -self.max_len:, :]
+                    actions = actions[:, -self.max_len:, :]
+
                     # Get the stochastic actions
                     stochastic_actions = actor(states, actions)
             
@@ -234,20 +238,20 @@ class SoftActorCritic():
                     s = states[-1, -1, :]
 
                     # Select the last action
-                    prev_tanh_a = actions[-1, -1, :]
+                    a_prev = actions[-1, -1, :]
 
                     # Select the last stochastic action
                     a_sto = stochastic_actions[-1, -1, :]
 
                     # Sample and convert the action
-                    a, tanh_a = actor.model.reparametrization_trick(a_sto)
+                    a_pretanh, a = actor.model.reparametrization_trick(a_sto)
 
                     # --------------- Environment's job to provide info ---------------
                     sending_data = {
                         "agent_id": 0,
                         "action": {
-                            "d_az": tanh_a[0].item() * 180,
-                            "d_el": tanh_a[1].item() * 90
+                            "d_az": a[0].item() * 180,
+                            "d_el": a[1].item() * 90
                         },
                         "delta_time": self.time_increment
                     }
@@ -267,13 +271,13 @@ class SoftActorCritic():
                     # --------------- Environment's job to provide info ---------------
 
                     # Store in the buffer
-                    replay_buffer.add((s, prev_tanh_a, tanh_a, r, s_next))
+                    replay_buffer.add((s, a_prev, a, r, s_next))
 
                     # Add it to the states
                     states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
 
                     # Add it to the actions
-                    actions = torch.cat([actions, tanh_a.unsqueeze(0).unsqueeze(0)], dim=1)
+                    actions = torch.cat([actions, a.unsqueeze(0).unsqueeze(0)], dim=1)
 
                 if not e == 0:
                     sys.stdout.write("\033[F")
@@ -286,39 +290,39 @@ class SoftActorCritic():
             # Loop over all gradient steps
             for g in range(self.gradient_steps):
                 with torch.no_grad():
-                    s, prev_tanh_a, current_tanh_a, r, s_next = tensor_manager.full_squeeze(*replay_buffer.sample(1))
+                    s, a_prev, a, r, s_next = tensor_manager.full_squeeze(*replay_buffer.sample(1))
 
-                stochastic_actions = actor(s, prev_tanh_a)
+                new_stochastic_actions = actor(s, a_prev)
 
                 # Select the last stochastic action
-                a_sto = stochastic_actions[-1, -1, :]
+                a_new_sto = new_stochastic_actions[-1, -1, :]
 
                 # Sample and convert the action
-                a, tanh_a = actor.model.reparametrization_trick(a_sto)
+                a_new_pretanh, a_new = actor.model.reparametrization_trick(a_new_sto)
 
                 # Find the minimum of the Q-networks
-                qmin = torch.min(q1(s, tanh_a), q2(s, tanh_a))
+                qmin = torch.min(q1(s, a_new), q2(s, a_new))
 
                 # Log probability
                 sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
                 corrective_term = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
 
-                for i, feature in enumerate(a_sto):
+                for i, feature in enumerate(a_new_sto):
                     mean = feature[0]
                     log_std = feature[1]
                     std = torch.exp(log_std)
                     var = std**2
                     
-                    sum = sum + (a[i] - mean)**2 / var # (x - mean)^2 / var
+                    sum = sum + (a_new_pretanh[i] - mean)**2 / var # (x - mean)^2 / var
                     sum = sum + 2 * log_std + torch.log(torch.tensor(2 * torch.pi, requires_grad=True)) # log(2 * pi * var) = 2 * log(std) + log(2 * pi)
-                    corrective_term = corrective_term - torch.log(1 - tanh_a[i]**2 + 1e-6) # -log(1 - tanh^2(a)) (with epsilon to avoid division by zero)
+                    corrective_term = corrective_term - torch.log(1 - a_new[i]**2 + 1e-6) # -log(1 - tanh^2(a_new_pretanh)) (with epsilon to avoid division by zero)
 
                 log_prob = -0.5 * sum + corrective_term # transformation-corrected log probability
 
-                # --------------- CLARIFICATION ---------------
+                # ------------------------------------- CLARIFICATION -------------------------------------
                 # Each loss is 0.5 * (prediction - target)^2 = 0.5 * MSE(prediction, target)
                 # It is not the same the target VALUE of v (in a certain step) and the target NETWORK of v
-                # ---------------------------------------------
+                # -----------------------------------------------------------------------------------------
 
                 # Target value for each loss
                 with torch.no_grad():
@@ -331,13 +335,13 @@ class SoftActorCritic():
                 optimizer_q2.zero_grad()
                 optimizer_pi.zero_grad()
 
-                import warnings
-                warnings.filterwarnings("ignore", category=DeprecationWarning)
+                # import warnings
+                # warnings.filterwarnings("ignore", category=DeprecationWarning)
 
                 # Compute the losses
                 J_v = 0.5 * F.mse_loss(v(s), target_v)
-                J_q1 = 0.5 * F.mse_loss(q1(s, current_tanh_a), target_q)
-                J_q2 = 0.5 * F.mse_loss(q2(s, current_tanh_a), target_q)
+                J_q1 = 0.5 * F.mse_loss(q1(s, a), target_q)
+                J_q2 = 0.5 * F.mse_loss(q2(s, a), target_q)
                 J_pi = self.temperature * log_prob - qmin
 
                 # Backpropagate
