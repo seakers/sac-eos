@@ -11,33 +11,6 @@ from classes.client import Client
 from classes.model import *
 from classes.utils import *
 
-# debug = False
-
-# # Architecture configuration
-# state_dim = 4
-# action_dim = 3
-# d_model = 32
-# max_len = 50
-# pos_dropout = 0.1
-# nhead = 8
-# num_encoder_layers = 1
-# num_decoder_layers = 1
-# dim_feedforward = 2048
-# transformer_dropout = 0.1
-# activation = "relu"
-# batch_first = True
-
-# # Soft Actor-Critic (SAC) algorithm configuration
-# iterations = 5
-# environment_steps = 5
-# gradient_steps = 10
-# lambda_v = 0.5
-# lambda_q = 0.5
-# lambda_pi = 0.5
-# tau = 0.001
-# discount = 0.99
-# temperature = 1
-
 class Actor(nn.Module):
     """
     Class to represent an Actor (policy, model) in the context of the SAC algorithm. Children class of nn.Module.
@@ -55,7 +28,7 @@ class Critic(nn.Module):
     """
     Class to represent a Critic in the context of the SAC algorithm. Children class of nn.Module.
     """
-    def __init__(self, in_dim: int, out_dim: int, hidden_dim: int=128, lr: float=1e-3):
+    def __init__(self, in_dim: int, out_dim: int, hidden_dim: tuple[int]=[256, 64, 256, 64], lr: float=1e-3):
         super(Critic, self).__init__()
         self.role_type = "Critic"
         self.in_dim = in_dim
@@ -63,13 +36,18 @@ class Critic(nn.Module):
         self.hidden_dim = hidden_dim
         self.lr = lr
 
-        self.sequential = nn.Sequential(
-            nn.Linear(in_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, out_dim)
-        )
+        layers = []
+        
+        for i in range(len(hidden_dim)):
+            if i == 0:
+                layers.append(nn.Linear(in_dim, hidden_dim[i]))
+            else:
+                layers.append(nn.Linear(hidden_dim[i-1], hidden_dim[i]))
+            layers.append(nn.ReLU())
+
+        layers.append(nn.Linear(hidden_dim[-1], out_dim))
+
+        self.sequential = nn.Sequential(*layers)
 
         self.init_weights()
 
@@ -87,23 +65,41 @@ class QNetwork(Critic):
     """
     Class to represent a Q-network. Children class of Critic.
     """
-    def __init__(self, state_dim: int, action_dim: int, out_dim: int, hidden_dim: int=128, lr: float=1e-3):
+    def __init__(self, state_dim: int, action_dim: int, out_dim: int, hidden_dim: tuple[int]=[256, 64, 256, 64], lr: float=1e-3):
         super(QNetwork, self).__init__(in_dim=(state_dim + action_dim), out_dim=out_dim, hidden_dim=hidden_dim, lr=lr)
         self.critic_type = "Q-network"
+        self.state_dim = state_dim
+        self.action_dim = action_dim
 
     def forward(self, state, action):
+        # Fill the state with zeros if it is not the same size as the input dimension
+        if state.shape[0] < self.in_dim:
+            state = torch.cat([state, torch.zeros(self.state_dim - state.shape[0])])
+        elif state.shape[0] > self.in_dim:
+            state = state[-self.in_dim:]
+
         x = torch.cat([state, action])
         x = super(QNetwork, self).forward(x)
-
         return x
     
 class VNetwork(Critic):
     """
     Class to represent a V-network. Children class of Critic.
     """
-    def __init__(self, state_dim, out_dim, hidden_dim: int=128, lr: float=1e-3):
+    def __init__(self, state_dim, out_dim, hidden_dim: tuple[int]=[256, 64, 256, 64], lr: float=1e-3):
         super(VNetwork, self).__init__(in_dim=state_dim, out_dim=out_dim, hidden_dim=hidden_dim, lr=lr)
         self.critic_type = "V-network"
+
+    def forward(self, state):
+        # Fill the state with zeros if it is not the same size as the input dimension
+        if state.shape[0] < self.in_dim:
+            state = torch.cat([state, torch.zeros(self.in_dim - state.shape[0])])
+        elif state.shape[0] > self.in_dim:
+            state = state[-self.in_dim:]
+
+        x = state
+        x = super(VNetwork, self).forward(x)
+        return x
 
 class SoftActorCritic():
     """
@@ -176,12 +172,12 @@ class SoftActorCritic():
         actor = Actor(model)
 
         # Create the NNs for the Q-networks
-        q1 = QNetwork(self.state_dim, self.action_dim, 1)
-        q2 = QNetwork(self.state_dim, self.action_dim, 1)
+        q1 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1)
+        q2 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1)
 
         # Create the NNs for the V-networks
-        v = VNetwork(self.state_dim, 1)
-        vtg = VNetwork(self.state_dim, 1)
+        v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
+        vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
 
         # Sending data to get the initial state
         sending_data = {
@@ -231,14 +227,11 @@ class SoftActorCritic():
                     states = states[:, -self.max_len:, :]
                     actions = actions[:, -self.max_len:, :]
 
+                    # Create the augmented state
+                    aug_state = [states.clone(), actions.clone()]
+
                     # Get the stochastic actions
                     stochastic_actions = actor(states, actions)
-            
-                    # Select the last state
-                    s = states[-1, -1, :]
-
-                    # Select the last action
-                    a_prev = actions[-1, -1, :]
 
                     # Select the last stochastic action
                     a_sto = stochastic_actions[-1, -1, :]
@@ -270,14 +263,21 @@ class SoftActorCritic():
                     s_next = torch.FloatTensor(state)
                     # --------------- Environment's job to provide info ---------------
 
-                    # Store in the buffer
-                    replay_buffer.add((s, a_prev, a, r, s_next))
-
                     # Add it to the states
                     states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
 
                     # Add it to the actions
                     actions = torch.cat([actions, a.unsqueeze(0).unsqueeze(0)], dim=1)
+
+                    # Adjust the maximum length of the states and actions
+                    states = states[:, -self.max_len:, :]
+                    actions = actions[:, -self.max_len:, :]
+
+                    # Augmented state for the next step
+                    aug_state_next = [states, actions]
+
+                    # Store in the buffer
+                    replay_buffer.add((aug_state, a, r, aug_state_next))
 
                 if not e == 0:
                     sys.stdout.write("\033[F")
@@ -290,9 +290,13 @@ class SoftActorCritic():
             # Loop over all gradient steps
             for g in range(self.gradient_steps):
                 with torch.no_grad():
-                    s, a_prev, a, r, s_next = tensor_manager.full_squeeze(*replay_buffer.sample(1))
+                    aug_state, a, r, aug_state_next = tensor_manager.full_squeeze(*replay_buffer.sample(1))
 
-                new_stochastic_actions = actor(s, a_prev)
+                # Batchify the tensors neccessary for the transformer
+                aug_state, aug_state_next = tensor_manager.batchify(aug_state, aug_state_next)
+
+                # Get the stochastic actions again
+                new_stochastic_actions = actor(aug_state[0], aug_state[1])
 
                 # Select the last stochastic action
                 a_new_sto = new_stochastic_actions[-1, -1, :]
@@ -300,8 +304,11 @@ class SoftActorCritic():
                 # Sample and convert the action
                 a_new_pretanh, a_new = actor.model.reparametrization_trick(a_new_sto)
 
+                # Reshape the augmented state to input to the Q-networks and the V-network as a single 1D tensor
+                aug_state_1D = torch.cat([aug_state[0], aug_state[1]], dim=2).view(-1)
+
                 # Find the minimum of the Q-networks
-                qmin = torch.min(q1(s, a_new), q2(s, a_new))
+                qmin = torch.min(q1(aug_state_1D, a_new), q2(aug_state_1D, a_new))
 
                 # Log probability
                 sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
@@ -324,10 +331,13 @@ class SoftActorCritic():
                 # It is not the same the target VALUE of v (in a certain step) and the target NETWORK of v
                 # -----------------------------------------------------------------------------------------
 
+                # Reshape the augmented state to input to the target V-network as a single 1D tensor
+                aug_state_next_1D = torch.cat([aug_state_next[0], aug_state_next[1]], dim=2).view(-1)
+
                 # Target value for each loss
                 with torch.no_grad():
                     target_v = qmin - self.temperature * log_prob
-                    target_q = r + self.discount * vtg(s_next)
+                    target_q = r + self.discount * vtg(aug_state_next_1D)
 
                 # Set the gradients to zero
                 optimizer_v.zero_grad()
@@ -335,13 +345,10 @@ class SoftActorCritic():
                 optimizer_q2.zero_grad()
                 optimizer_pi.zero_grad()
 
-                # import warnings
-                # warnings.filterwarnings("ignore", category=DeprecationWarning)
-
                 # Compute the losses
-                J_v = 0.5 * F.mse_loss(v(s), target_v)
-                J_q1 = 0.5 * F.mse_loss(q1(s, a), target_q)
-                J_q2 = 0.5 * F.mse_loss(q2(s, a), target_q)
+                J_v = 0.5 * F.mse_loss(v(aug_state_1D), target_v)
+                J_q1 = 0.5 * F.mse_loss(q1(aug_state_1D, a), target_q)
+                J_q2 = 0.5 * F.mse_loss(q2(aug_state_1D, a), target_q)
                 J_pi = self.temperature * log_prob - qmin
 
                 # Backpropagate

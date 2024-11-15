@@ -1,3 +1,5 @@
+import torch
+
 class TensorManager():
     """
     Class to manage the tensors with overall applications.
@@ -7,16 +9,39 @@ class TensorManager():
 
     def full_squeeze(self, *tensors):
         """
-        Squeeze tensor until it does not have any dimension of size 1.
+        Squeeze tensor until it does not have any dimension of size 1 or squeeze the tensors in tuples until they have 3 dimensions (transformer requirements).
         """
-        list = []
+        elements = []
         for tensor in tensors:
-            while tensor.dim() != 0 and tensor.shape[0] == 1:
-                tensor = tensor.squeeze(0)
+            if isinstance(tensor, torch.Tensor):
+                while tensor.dim() != 0 and tensor.shape[0] == 1:
+                    tensor = tensor.squeeze(0)
+            elif isinstance(tensor, list):
+                for i in range(len(tensor)):
+                    while tensor[i].dim() != 0 and tensor[i].shape[0] == 1:
+                        tensor[i] = tensor[i].squeeze(0)
 
-            list.append(tensor)
+            elements.append(tensor)
 
-        return list
+        return elements
+    
+    def batchify(self, *tensors):
+        """
+        Concatenate tensors into a single tensor.
+        """
+        elements = []
+        for tensor in tensors:
+            if isinstance(tensor, torch.Tensor):
+                while tensor.dim() < 3:
+                    tensor = tensor.unsqueeze(0)
+            elif isinstance(tensor, list):
+                for i in range(len(tensor)):
+                    while tensor[i].dim() < 3:
+                        tensor[i] = tensor[i].unsqueeze(0)
+
+            elements.append(tensor)
+
+        return elements
     
 class DataFromJSON():
     """

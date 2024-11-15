@@ -9,7 +9,7 @@
     },
     "Architecture": {
         "d_model": 32,
-        "max_len": 50,
+        "max_len": 100,
         "pos_dropout": 0.1,
         "nhead": 8,
         "num_encoder_layers": 1,
