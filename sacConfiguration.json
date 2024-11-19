@@ -3,7 +3,7 @@
         "debug": false
     },
     "Environment": {
-        "state_dim": 8,
+        "state_dim": 11,
         "action_dim": 2,
         "time_increment": 60
     },
