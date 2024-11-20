@@ -11,6 +11,8 @@ from classes.client import Client
 from classes.model import *
 from classes.utils import *
 
+RT = 6371.0 # Earth radius in km
+
 class Actor(nn.Module):
     """
     Class to represent an Actor (policy, model) in the context of the SAC algorithm. Children class of nn.Module.
@@ -193,8 +195,10 @@ class SoftActorCritic():
         }
         state, _, _ = self.client.get_next_state("get_next", sending_data)
 
+        vec_state = self.normalize_state(state)
+
         # Input tensor of 1 batch and 1 sequence of state_dim dimensional states
-        states = torch.FloatTensor([[state]])
+        states = torch.FloatTensor([[vec_state]])
 
         # Input tensor of 1 batch and 1 sequence of action_dim dimensional actions (equal to 0)
         actions = torch.FloatTensor([[[0 for _ in range(self.action_dim)]]])
@@ -258,11 +262,14 @@ class SoftActorCritic():
                         print("Time is up!")
                         break
 
+                    # Normalize the state
+                    vec_state = self.normalize_state(state)
+
                     # Get the reward
                     r = torch.FloatTensor([reward])
 
                     # Get the next state
-                    s_next = torch.FloatTensor(state)
+                    s_next = torch.FloatTensor(vec_state)
                     # --------------- Environment's job to provide info ---------------
 
                     # Add it to the states
@@ -376,3 +383,24 @@ class SoftActorCritic():
                 print(f"Gradient step {g+1}/{self.gradient_steps} done!")
 
             print("✔ Iteration done!")
+    
+    def normalize_state(self, state: dict) -> list:
+        """
+        Normalize the action dictionary to a list.
+        """
+        print(f"State: {state}")
+        # Conversion dictionary: each has two elements, the first is the gain and the second is the offset
+        conversion_dict = {
+            "a": (1/RT, 0), "e": (1, 0), "i": (1/180, 0), "raan": (1/360, 0), "aop": (1/360, 0), "ta": (1/360, 0), # orbital elements
+            "az": (1/360, 0), "el": (1/180, 0.5), # azimuth and elevation
+            "detic_lat": (1/180, 0.5), "detic_lon": (1/360, 0), "detic_alt": (1/RT, 0), # nadir position
+            "lat": (1/180, 0.5), "lon": (1/360, 0), "priority": (1/10, 0) # targets clues
+        }
+
+        vec_state = []
+        for key, value in state.items():
+            if key.startswith("lat_") or key.startswith("lon_") or key.startswith("priority_"):
+                key = key.split("_")[0]
+            vec_state.append(value * conversion_dict[key][0] + conversion_dict[key][1])
+
+        return vec_state
