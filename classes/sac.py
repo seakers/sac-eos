@@ -119,7 +119,7 @@ class SoftActorCritic():
             if not key.startswith("__"):
                 setattr(self, key, value)
 
-    def train(self):
+    def create_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
         torch.autograd.set_detect_anomaly(True)
 
         # Create the embedder object for states
@@ -179,6 +179,9 @@ class SoftActorCritic():
         v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
         vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
 
+        return actor, q1, q2, v, vtg
+
+    def train(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork):
         # Sending data to get the initial state
         sending_data = {
             "agent_id": 0,
@@ -188,7 +191,6 @@ class SoftActorCritic():
             },
             "delta_time": 0
         }
-        
         state, _, _ = self.client.get_next_state("get_next", sending_data)
 
         # Input tensor of 1 batch and 1 sequence of state_dim dimensional states
