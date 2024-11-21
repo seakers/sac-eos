@@ -1,2 +1,5 @@
 # Pycache folders
 __pycache__/
+
+# Model files
+*.pth
