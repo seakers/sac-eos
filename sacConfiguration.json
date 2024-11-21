@@ -1,6 +1,7 @@
 {
     "General": {
-        "debug": false
+        "debug": false,
+        "load_model": true
     },
     "Environment": {
         "state_dim": 17,

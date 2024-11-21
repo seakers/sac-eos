@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torchrl.data import ReplayBuffer
 
 import sys
+import os
 
 from classes.client import Client
 from classes.model import *
@@ -107,23 +108,28 @@ class SoftActorCritic():
     """
     Class to represent the Soft Actor-Critic algorithm. Children class of nn.Module.
     """
-    def __init__(self, conf: DataFromJSON, client: Client):
+    def __init__(self, conf: DataFromJSON, client: Client, save_path: str):
         self.__role_type = "Soft Actor-Critic"
         self.__conf = conf
         self.client = client
+        self.save_path = save_path
         self.set_properties(conf)
 
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
 
     def set_properties(self, conf: DataFromJSON):
-       for key, value in conf.__dict__.items():
+        """
+        Set the properties of the SAC object.
+        """
+        for key, value in conf.__dict__.items():
             if not key.startswith("__"):
                 setattr(self, key, value)
 
     def create_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
-        torch.autograd.set_detect_anomaly(True)
-
+        """
+        Create the entities for the SAC algorithm.
+        """
         # Create the embedder object for states
         states_embedder = FloatEmbedder(
             input_dim=self.state_dim,
@@ -181,9 +187,23 @@ class SoftActorCritic():
         v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
         vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
 
+        # Load the previous models if they exist
+        if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}\\model.pth"):
+            print("Loading previous models...")
+            actor.model.load_state_dict(torch.load(f"{self.save_path}\\model.pth", weights_only=True))
+            q1.load_state_dict(torch.load(f"{self.save_path}\\q1.pth", weights_only=True))
+            q2.load_state_dict(torch.load(f"{self.save_path}\\q2.pth", weights_only=True))
+            v.load_state_dict(torch.load(f"{self.save_path}\\v.pth", weights_only=True))
+            vtg.load_state_dict(torch.load(f"{self.save_path}\\vtg.pth", weights_only=True))
+
         return actor, q1, q2, v, vtg
 
     def train(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork):
+        """
+        Begin the training of the SAC algorithm.
+        """
+        torch.autograd.set_detect_anomaly(True)
+
         # Sending data to get the initial state
         sending_data = {
             "agent_id": 0,
@@ -403,3 +423,13 @@ class SoftActorCritic():
             vec_state.append(value * conversion_dict[key][0] + conversion_dict[key][1])
 
         return vec_state
+    
+    def save_model(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork):
+        """
+        Save the model to the specified path.
+        """
+        torch.save(actor.model.state_dict(), f"{self.save_path}\\model.pth")
+        torch.save(q1.state_dict(), f"{self.save_path}\\q1.pth")
+        torch.save(q2.state_dict(), f"{self.save_path}\\q2.pth")
+        torch.save(v.state_dict(), f"{self.save_path}\\v.pth")
+        torch.save(vtg.state_dict(), f"{self.save_path}\\vtg.pth")

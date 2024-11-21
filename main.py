@@ -14,6 +14,7 @@ if __name__ == "__main__":
 
         argparse.add_argument("--host", default="localhost", type=str, help="Host address.")
         argparse.add_argument("--port", default=5555, type=int, help="Port number.")
+        argparse.add_argument("--save", type=str, help="Configuration file.")
 
         args = argparse.parse_args()
 
@@ -28,13 +29,16 @@ if __name__ == "__main__":
         conf = DataFromJSON(config, "configuration")
 
         # Create the SAC algorithm
-        sac = SoftActorCritic(conf, client)
+        sac = SoftActorCritic(conf, client, args.save)
 
         # Create the agent and the critics
         actor, q1, q2, v, vtg = sac.create_entities()
 
         # Train the agent
         sac.train(actor, q1, q2, v, vtg)
+
+        # Save the model
+        sac.save_model(actor, q1, q2, v, vtg)
     
     except Exception as e:
         print(f"Error: {e}")
