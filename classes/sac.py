@@ -388,7 +388,6 @@ class SoftActorCritic():
         """
         Normalize the action dictionary to a list.
         """
-        print(f"State: {state}")
         # Conversion dictionary: each has two elements, the first is the gain and the second is the offset
         conversion_dict = {
             "a": (1/RT, 0), "e": (1, 0), "i": (1/180, 0), "raan": (1/360, 0), "aop": (1/360, 0), "ta": (1/360, 0), # orbital elements
