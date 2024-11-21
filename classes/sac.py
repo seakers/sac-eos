@@ -7,6 +7,7 @@ from torchrl.data import ReplayBuffer
 
 import sys
 import os
+import matplotlib.pyplot as plt
 
 from classes.client import Client
 from classes.model import *
@@ -114,6 +115,7 @@ class SoftActorCritic():
         self.client = client
         self.save_path = save_path
         self.set_properties(conf)
+        self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
 
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
@@ -286,7 +288,7 @@ class SoftActorCritic():
                     vec_state = self.normalize_state(state)
 
                     # Get the reward
-                    r = torch.FloatTensor([reward])
+                    r = torch.FloatTensor([reward * self.reward_scale])
 
                     # Get the next state
                     s_next = torch.FloatTensor(vec_state)
@@ -380,6 +382,12 @@ class SoftActorCritic():
                 J_q2 = 0.5 * F.mse_loss(q2(aug_state_1D, a), target_q)
                 J_pi = self.temperature * log_prob - qmin
 
+                # Store the losses
+                self.losses["v"].append(J_v.item())
+                self.losses["q1"].append(J_q1.item())
+                self.losses["q2"].append(J_q2.item())
+                self.losses["pi"].append(J_pi.item())
+
                 # Backpropagate
                 J_v.backward()
                 J_q1.backward(retain_graph=True)
@@ -410,7 +418,7 @@ class SoftActorCritic():
         """
         # Conversion dictionary: each has two elements, the first is the gain and the second is the offset
         conversion_dict = {
-            "a": (1/RT, 0), "e": (1, 0), "i": (1/180, 0), "raan": (1/360, 0), "aop": (1/360, 0), "ta": (1/360, 0), # orbital elements
+            "a": (1/RT, -1), "e": (1, 0), "i": (1/180, 0), "raan": (1/360, 0), "aop": (1/360, 0), "ta": (1/360, 0), # orbital elements
             "az": (1/360, 0), "el": (1/180, 0.5), # azimuth and elevation
             "detic_lat": (1/180, 0.5), "detic_lon": (1/360, 0), "detic_alt": (1/RT, 0), # nadir position
             "lat": (1/180, 0.5), "lon": (1/360, 0), "priority": (1/10, 0) # targets clues
@@ -423,6 +431,26 @@ class SoftActorCritic():
             vec_state.append(value * conversion_dict[key][0] + conversion_dict[key][1])
 
         return vec_state
+    
+    def plot_losses(self, losses: dict):
+        """
+        Plot the losses.
+        """
+        fig, ax = plt.subplots(2, 2, figsize=(10, 10))
+
+        ax[0, 0].plot(losses["v"])
+        ax[0, 0].set_title("V-network loss")
+
+        ax[0, 1].plot(losses["q1"])
+        ax[0, 1].set_title("Q1-network loss")
+
+        ax[1, 0].plot(losses["q2"])
+        ax[1, 0].set_title("Q2-network loss")
+
+        ax[1, 1].plot(losses["pi"])
+        ax[1, 1].set_title("Policy loss")
+
+        plt.savefig(f"{self.save_path}\\losses.png")
     
     def save_model(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork):
         """

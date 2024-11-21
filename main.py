@@ -37,6 +37,9 @@ if __name__ == "__main__":
         # Train the agent
         sac.train(actor, q1, q2, v, vtg)
 
+        # Plot the losses
+        sac.plot_losses(sac.losses)
+
         # Save the model
         sac.save_model(actor, q1, q2, v, vtg)
     
