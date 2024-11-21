@@ -6,7 +6,8 @@
     "Environment": {
         "state_dim": 17,
         "action_dim": 2,
-        "time_increment": 60
+        "time_increment": 60,
+        "warm_up_steps": 0
     },
     "Architecture": {
         "d_model": 32,

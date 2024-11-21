@@ -31,17 +31,8 @@ if __name__ == "__main__":
         # Create the SAC algorithm
         sac = SoftActorCritic(conf, client, args.save)
 
-        # Create the agent and the critics
-        actor, q1, q2, v, vtg = sac.create_entities()
-
-        # Train the agent
-        sac.train(actor, q1, q2, v, vtg)
-
-        # Plot the losses
-        sac.plot_losses(sac.losses)
-
-        # Save the model
-        sac.save_model(actor, q1, q2, v, vtg)
+        # Start the SAC algorithm
+        sac.start()
     
     except Exception as e:
         print(f"Error: {e}")
