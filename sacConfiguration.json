@@ -25,10 +25,10 @@
         "environment_steps": 5,
         "gradient_steps": 10,
         "reward_scale": 0.1,
-        "lambda_v": 0.5,
-        "lambda_q": 0.5,
-        "lambda_pi": 0.5,
-        "tau": 0.001,
+        "lambda_v": 5e-4,
+        "lambda_q": 5e-4,
+        "lambda_pi": 5e-4,
+        "tau": 1e-3,
         "discount": 0.99,
         "temperature": 1.0
     }

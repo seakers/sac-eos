@@ -7,6 +7,7 @@ from torchrl.data import ReplayBuffer
 
 import sys
 import os
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from classes.client import Client
@@ -200,15 +201,15 @@ class SoftActorCritic():
         )
 
         # Create the actor
-        actor = Actor(model)
+        actor = Actor(model, lr=self.lambda_pi)
 
         # Create the NNs for the Q-networks
-        q1 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1)
-        q2 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1)
+        q1 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
+        q2 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
 
         # Create the NNs for the V-networks
-        v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
-        vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1)
+        v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
+        vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
 
         # Load the previous models if they exist
         if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}\\model.pth"):
@@ -531,16 +532,21 @@ class SoftActorCritic():
         """
         fig, ax = plt.subplots(2, 2, figsize=(10, 10))
 
-        ax[0, 0].plot(losses["v"])
+        smoothed_q1 = pd.DataFrame(losses["q1"]).rolling(window=int(len(losses["q1"])/10)).mean()
+        smoothed_q2 = pd.DataFrame(losses["q2"]).rolling(window=int(len(losses["q2"])/10)).mean()
+        smoothed_v = pd.DataFrame(losses["v"]).rolling(window=int(len(losses["v"])/10)).mean()
+        smoothed_pi = pd.DataFrame(losses["pi"]).rolling(window=int(len(losses["pi"])/10)).mean()
+
+        ax[0, 0].plot(smoothed_v)
         ax[0, 0].set_title("V-network loss")
 
-        ax[0, 1].plot(losses["q1"])
+        ax[0, 1].plot(smoothed_q1)
         ax[0, 1].set_title("Q1-network loss")
 
-        ax[1, 0].plot(losses["q2"])
+        ax[1, 0].plot(smoothed_q2)
         ax[1, 0].set_title("Q2-network loss")
 
-        ax[1, 1].plot(losses["pi"])
+        ax[1, 1].plot(smoothed_pi)
         ax[1, 1].set_title("Policy loss")
 
         plt.savefig(f"{self.save_path}\\losses.png", dpi=500)
