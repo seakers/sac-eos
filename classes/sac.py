@@ -228,12 +228,13 @@ class SoftActorCritic():
         """
         torch.autograd.set_detect_anomaly(True)
 
+
         # Sending data to get the initial state
         sending_data = {
             "agent_id": 0,
             "action": {
-                "d_az": 0,
-                "d_el": 0
+                "d_pitch": 0,
+                "d_roll": 0
             },
             "delta_time": 0
         }
@@ -276,8 +277,8 @@ class SoftActorCritic():
                 sending_data = {
                     "agent_id": 0,
                     "action": {
-                        "d_az": a[0].item() * 180,
-                        "d_el": a[1].item() * 90
+                        "d_pitch": a[0].item() * 90,
+                        "d_roll": a[1].item() * 180
                     },
                     "delta_time": self.time_increment
                 }
@@ -365,8 +366,8 @@ class SoftActorCritic():
                     sending_data = {
                         "agent_id": 0,
                         "action": {
-                            "d_az": a[0].item() * 180,
-                            "d_el": a[1].item() * 90
+                            "d_pitch": a[0].item() * 90,
+                            "d_roll": a[1].item() * 180
                         },
                         "delta_time": self.time_increment
                     }
@@ -514,6 +515,7 @@ class SoftActorCritic():
         conversion_dict = {
             "a": (1/RT, -1), "e": (1, 0), "i": (1/180, 0), "raan": (1/360, 0), "aop": (1/360, 0), "ta": (1/360, 0), # orbital elements
             "az": (1/360, 0), "el": (1/180, 0.5), # azimuth and elevation
+            "pitch": (1/180, 0.5), "roll": (1/360, 0.5), # attitude
             "detic_lat": (1/180, 0.5), "detic_lon": (1/360, 0), "detic_alt": (1/RT, 0), # nadir position
             "lat": (1/180, 0.5), "lon": (1/360, 0), "priority": (1/10, 0) # targets clues
         }
