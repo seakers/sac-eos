@@ -228,7 +228,6 @@ class SoftActorCritic():
         """
         torch.autograd.set_detect_anomaly(True)
 
-
         # Sending data to get the initial state
         sending_data = {
             "agent_id": 0,
@@ -271,7 +270,7 @@ class SoftActorCritic():
                 a_sto = stochastic_actions[-1, -1, :]
 
                 # Sample and convert the action
-                a_pretanh, a = actor.model.reparametrization_trick(a_sto)
+                _, a = actor.model.reparametrization_trick(a_sto)
 
                 # --------------- Environment's job to provide info ---------------
                 sending_data = {
@@ -360,7 +359,7 @@ class SoftActorCritic():
                     a_sto = stochastic_actions[-1, -1, :]
 
                     # Sample and convert the action
-                    a_pretanh, a = actor.model.reparametrization_trick(a_sto)
+                    _, a = actor.model.reparametrization_trick(a_sto)
 
                     # --------------- Environment's job to provide info ---------------
                     sending_data = {
