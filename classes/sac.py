@@ -139,10 +139,10 @@ class SoftActorCritic():
         actor, q1, q2, v, vtg = self.create_entities()
 
         # Warm up the agent
-        states, actions = self.warm_up(actor)
+        list_states, list_actions = self.warm_up(actor)
 
         # Train the agent
-        actor, q1, q2, v, vtg = self.train(actor, q1, q2, v, vtg, states, actions)
+        actor, q1, q2, v, vtg = self.train(actor, q1, q2, v, vtg, list_states, list_actions)
 
         # Plot the losses
         self.plot_losses(self.losses)
@@ -222,31 +222,39 @@ class SoftActorCritic():
 
         return actor, q1, q2, v, vtg
 
-    def warm_up(self, actor: Actor):
+    def warm_up(self, actor: Actor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         """
         Warm up the SAC algorithm before starting the training loop.
         """
         torch.autograd.set_detect_anomaly(True)
 
-        # Sending data to get the initial state
-        sending_data = {
-            "agent_id": 0,
-            "action": {
-                "d_pitch": 0,
-                "d_roll": 0
-            },
-            "delta_time": 0
-        }
-        state, _, _ = self.client.get_next_state("get_next", sending_data)
+        list_states: list[torch.Tensor] = []
+        list_actions: list[torch.Tensor] = []
 
-        # Normalize the state given by the environment
-        vec_state = self.normalize_state(state)
+        # Loop over all agents
+        for agt in self.agents:
+            # Sending data to get the initial state
+            sending_data = {
+                "agent_id": agt,
+                "action": {
+                    "d_pitch": 0,
+                    "d_roll": 0
+                },
+                "delta_time": 0
+            }
+            state, _, _ = self.client.get_next_state("get_next", sending_data)
 
-        # Input tensor of 1 batch and 1 sequence of state_dim dimensional states
-        states = torch.FloatTensor([[vec_state]])
+            # Normalize the state given by the environment
+            vec_state = self.normalize_state(state)
 
-        # Input tensor of 1 batch and 1 sequence of action_dim dimensional actions (equal to 0)
-        actions = torch.FloatTensor([[[0 for _ in range(self.action_dim)]]])
+            # Input tensor of 1 batch and 1 sequence of state_dim dimensional states
+            states = torch.FloatTensor([[vec_state]])
+
+            # Input tensor of 1 batch and 1 sequence of action_dim dimensional actions (equal to 0)
+            actions = torch.FloatTensor([[[0 for _ in range(self.action_dim)]]])
+
+            list_states += [states]
+            list_actions += [actions]
 
         # Loop flags
         done = False
@@ -255,95 +263,11 @@ class SoftActorCritic():
 
         # Loop over all iterations
         for w in range(self.warm_up_steps):
-            with torch.no_grad():
-                # Adjust the maximum length of the states and actions
-                states = states[:, -self.max_len:, :]
-                actions = actions[:, -self.max_len:, :]
+            # Loop over all agents
+            for idx, agt in enumerate(self.agents):
+                states = list_states[idx]
+                actions = list_actions[idx]
 
-                # Create the augmented state
-                aug_state = [states.clone(), actions.clone()]
-
-                # Get the stochastic actions
-                stochastic_actions = actor(states, actions)
-
-                # Select the last stochastic action
-                a_sto = stochastic_actions[-1, -1, :]
-
-                # Sample and convert the action
-                _, a = actor.model.reparametrization_trick(a_sto)
-
-                # --------------- Environment's job to provide info ---------------
-                sending_data = {
-                    "agent_id": 0,
-                    "action": {
-                        "d_pitch": a[0].item() * 90,
-                        "d_roll": a[1].item() * 180
-                    },
-                    "delta_time": self.time_increment
-                }
-                
-                state, reward, done = self.client.get_next_state("get_next", sending_data)
-
-                # Break if time is up
-                if done:
-                    print("Time is up!")
-                    break
-
-                # Normalize the state
-                vec_state = self.normalize_state(state)
-
-                # Get the reward
-                r = torch.FloatTensor([reward * self.reward_scale])
-
-                # Get the next state
-                s_next = torch.FloatTensor(vec_state)
-                # --------------- Environment's job to provide info ---------------
-
-                # Add it to the states
-                states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
-
-                # Add it to the actions
-                actions = torch.cat([actions, a.unsqueeze(0).unsqueeze(0)], dim=1)
-
-                # Adjust the maximum length of the states and actions
-                states = states[:, -self.max_len:, :]
-                actions = actions[:, -self.max_len:, :]
-
-                # Augmented state for the next step
-                aug_state_next = [states, actions]
-
-                # Store in the buffer
-                self.replay_buffer.add((aug_state, a, r, aug_state_next))
-
-        print("✔ Warm-up done!")
-        
-        return states, actions
-
-    def train(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork, states: torch.Tensor, actions: torch.Tensor):
-        """
-        Begin the training of the SAC algorithm.
-        """
-        torch.autograd.set_detect_anomaly(True)
-
-        # Optimizers
-        optimizer_v = optim.Adam(v.parameters(), lr=v.lr)
-        optimizer_q1 = optim.Adam(q1.parameters(), lr=q1.lr)
-        optimizer_q2 = optim.Adam(q2.parameters(), lr=q2.lr)
-        optimizer_pi = optim.Adam(actor.model.parameters(), lr=actor.lr)
-
-        # Loop flags
-        done = False
-        iteration = 1
-
-        print("Starting training...")
-
-        # Loop over all iterations
-        while not done:
-            print(f"\nStarting iteration {iteration}...")
-            iteration += 1
-
-            # Loop over all environment steps
-            for e in range(self.environment_steps):
                 with torch.no_grad():
                     # Adjust the maximum length of the states and actions
                     states = states[:, -self.max_len:, :]
@@ -363,7 +287,7 @@ class SoftActorCritic():
 
                     # --------------- Environment's job to provide info ---------------
                     sending_data = {
-                        "agent_id": 0,
+                        "agent_id": agt,
                         "action": {
                             "d_pitch": a[0].item() * 90,
                             "d_roll": a[1].item() * 180
@@ -403,6 +327,112 @@ class SoftActorCritic():
 
                     # Store in the buffer
                     self.replay_buffer.add((aug_state, a, r, aug_state_next))
+
+                    # Replace the states and actions lists
+                    list_states[idx] = states
+                    list_actions[idx] = actions
+
+        print("✔ Warm-up done!")
+        
+        return list_states, list_actions
+
+    def train(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork, list_states: list[torch.Tensor], list_actions: list[torch.Tensor]):
+        """
+        Begin the training of the SAC algorithm.
+        """
+        torch.autograd.set_detect_anomaly(True)
+
+        # Optimizers
+        optimizer_v = optim.Adam(v.parameters(), lr=v.lr)
+        optimizer_q1 = optim.Adam(q1.parameters(), lr=q1.lr)
+        optimizer_q2 = optim.Adam(q2.parameters(), lr=q2.lr)
+        optimizer_pi = optim.Adam(actor.model.parameters(), lr=actor.lr)
+
+        # Loop flags
+        done = False
+        iteration = 1
+
+        print("Starting training...")
+
+        # Loop over all iterations
+        while not done:
+            print(f"\nStarting iteration {iteration}...")
+            iteration += 1
+
+            # Loop over all environment steps
+            for e in range(self.environment_steps):
+                # Loop over all agents
+                for idx, agt in enumerate(self.agents):
+                    states = list_states[idx]
+                    actions = list_actions[idx]
+
+                    with torch.no_grad():
+                        # Adjust the maximum length of the states and actions
+                        states = states[:, -self.max_len:, :]
+                        actions = actions[:, -self.max_len:, :]
+
+                        # Create the augmented state
+                        aug_state = [states.clone(), actions.clone()]
+
+                        # Get the stochastic actions
+                        stochastic_actions = actor(states, actions)
+
+                        # Select the last stochastic action
+                        a_sto = stochastic_actions[-1, -1, :]
+
+                        # Sample and convert the action
+                        _, a = actor.model.reparametrization_trick(a_sto)
+
+                        # --------------- Environment's job to provide info ---------------
+                        sending_data = {
+                            "agent_id": agt,
+                            "action": {
+                                "d_pitch": a[0].item() * 90,
+                                "d_roll": a[1].item() * 180
+                            },
+                            "delta_time": self.time_increment
+                        }
+                        
+                        state, reward, done = self.client.get_next_state("get_next", sending_data)
+
+                        # Break if time is up
+                        if done:
+                            print("Time is up!")
+                            break
+
+                        # Normalize the state
+                        vec_state = self.normalize_state(state)
+
+                        # Get the reward
+                        r = torch.FloatTensor([reward * self.reward_scale])
+
+                        # Get the next state
+                        s_next = torch.FloatTensor(vec_state)
+                        # --------------- Environment's job to provide info ---------------
+
+                        # Add it to the states
+                        states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
+
+                        # Add it to the actions
+                        actions = torch.cat([actions, a.unsqueeze(0).unsqueeze(0)], dim=1)
+
+                        # Adjust the maximum length of the states and actions
+                        states = states[:, -self.max_len:, :]
+                        actions = actions[:, -self.max_len:, :]
+
+                        # Augmented state for the next step
+                        aug_state_next = [states, actions]
+
+                        # Store in the buffer
+                        self.replay_buffer.add((aug_state, a, r, aug_state_next))
+
+                        # Replace the states and actions lists
+                        list_states[idx] = states
+                        list_actions[idx] = actions
+
+                # Break if time is up
+                if done:
+                    break
 
                 if not e == 0:
                     sys.stdout.write("\033[F")
