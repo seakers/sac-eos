@@ -142,7 +142,7 @@ class SoftActorCritic():
         states, actions = self.warm_up(actor)
 
         # Train the agent
-        self.train(actor, q1, q2, v, vtg, states, actions)
+        actor, q1, q2, v, vtg = self.train(actor, q1, q2, v, vtg, states, actions)
 
         # Plot the losses
         self.plot_losses(self.losses)
@@ -505,6 +505,8 @@ class SoftActorCritic():
                 print(f"Gradient step {g+1}/{self.gradient_steps} done!")
 
             print("✔ Iteration done!")
+
+        return actor, q1, q2, v, vtg
     
     def normalize_state(self, state: dict) -> list:
         """
