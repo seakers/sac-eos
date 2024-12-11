@@ -3,9 +3,9 @@ import sys
 import argparse
 import traceback
 
-from classes.sac import SoftActorCritic
-from classes.utils import DataFromJSON
-from classes.client import Client
+from scripts.sac import SoftActorCritic
+from scripts.utils import DataFromJSON
+from scripts.client import Client
 
 if __name__ == "__main__":
     try:

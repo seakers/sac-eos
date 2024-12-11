@@ -10,9 +10,9 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from classes.client import Client
-from classes.model import *
-from classes.utils import *
+from scripts.client import Client
+from scripts.model import *
+from scripts.utils import *
 
 RT = 6371.0 # Earth radius in km
 
@@ -259,7 +259,7 @@ class SoftActorCritic():
         # Loop flags
         done = False
 
-        print("Starting warm-up...")
+        print("Starting warm up...")
 
         # Loop over all iterations
         for w in range(self.warm_up_steps):
@@ -331,8 +331,12 @@ class SoftActorCritic():
                     # Replace the states and actions lists
                     list_states[idx] = states
                     list_actions[idx] = actions
+                
+            if not w == 0:
+                sys.stdout.write("\033[F")
+            print(f"Warm up step {w+1}/{self.warm_up_steps} done!")
 
-        print("✔ Warm-up done!")
+        print("✔ Warm up done!")
         
         return list_states, list_actions
 
@@ -501,10 +505,13 @@ class SoftActorCritic():
                 optimizer_pi.zero_grad()
 
                 # Compute the losses
-                J_v = 0.5 * F.mse_loss(v(aug_state_1D), target_v)
-                J_q1 = 0.5 * F.mse_loss(q1(aug_state_1D, a), target_q)
-                J_q2 = 0.5 * F.mse_loss(q2(aug_state_1D, a), target_q)
-                J_pi = self.temperature * log_prob - qmin
+                J_v: torch.Tensor = 0.5 * F.mse_loss(v(aug_state_1D), target_v)
+                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1(aug_state_1D, a), target_q)
+                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2(aug_state_1D, a), target_q)
+                J_pi: torch.Tensor = self.temperature * log_prob - qmin
+
+                if self.debug:
+                    print(f"Reward: {r.item():.4f}; Losses: {J_v.item():.4f}, {J_q1.item():.4f}, {J_q2.item():.4f}, {J_pi.item():.4f}; Log probability: {log_prob.item():.4f}; Qmin: {qmin.item():.4f}")
 
                 # Store the losses
                 self.losses["v"].append(J_v.item())
@@ -530,7 +537,7 @@ class SoftActorCritic():
                         vtg_params.data.mul_(1 - self.tau)
                         vtg_params.data.add_(self.tau * v_params.data)
 
-                if not g == 0:
+                if not g == 0 and not self.debug:
                     sys.stdout.write("\033[F")
                 print(f"Gradient step {g+1}/{self.gradient_steps} done!")
 
