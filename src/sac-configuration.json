@@ -1,6 +1,6 @@
 {
     "General": {
-        "debug": true,
+        "debug": false,
         "load_model": false
     },
     "Environment": {
@@ -22,9 +22,9 @@
         "batch_first": true
     },
     "Soft Actor-Critic": {
-        "warm_up_steps": 1000,
+        "warm_up_steps": 4,
         "environment_steps": 5,
-        "gradient_steps": 10,
+        "gradient_steps": 5,
         "reward_scale": 0.1,
         "lambda_v": 1e-4,
         "lambda_q": 1e-4,

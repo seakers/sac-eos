@@ -7,6 +7,7 @@ from torchrl.data import ReplayBuffer
 
 import sys
 import os
+from time import perf_counter
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -273,6 +274,9 @@ class SoftActorCritic():
                     states = states[:, -self.max_len:, :]
                     actions = actions[:, -self.max_len:, :]
 
+                    if self.debug:
+                        before = perf_counter()
+
                     # Create the augmented state
                     aug_state = [states.clone(), actions.clone()]
 
@@ -285,6 +289,12 @@ class SoftActorCritic():
                     # Sample and convert the action
                     _, a = actor.model.reparametrization_trick(a_sto)
 
+                    if self.debug:
+                        print(f"Time taken to get the action: {perf_counter() - before:.4f} seconds")
+
+                    if self.debug:
+                        before = perf_counter()
+
                     # --------------- Environment's job to provide info ---------------
                     sending_data = {
                         "agent_id": agt,
@@ -296,6 +306,9 @@ class SoftActorCritic():
                     }
                     
                     state, reward, done = self.client.get_next_state("get_next", sending_data)
+
+                    if self.debug:
+                        print(f"Time taken to get the next state: {perf_counter() - before:.4f} seconds")
 
                     # Break if time is up
                     if done:
@@ -331,8 +344,13 @@ class SoftActorCritic():
                     # Replace the states and actions lists
                     list_states[idx] = states
                     list_actions[idx] = actions
-                
-            if not w == 0:
+
+            # Break if time is up
+            if done:
+                print("Time is up!")
+                break
+
+            if not w == 0 and not self.debug:
                 sys.stdout.write("\033[F")
             print(f"Warm up step {w+1}/{self.warm_up_steps} done!")
 
