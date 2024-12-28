@@ -3,10 +3,11 @@ import torchviz
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torchrl.data import ReplayBuffer
+from torchrl.data import ReplayBuffer, ListStorage
 
 import sys
 import os
+import warnings
 from time import perf_counter
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -118,7 +119,6 @@ class SoftActorCritic():
         self.save_path = save_path
         self.set_properties(conf)
         self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
-        self.replay_buffer = ReplayBuffer()
         self.tensor_manager = TensorManager()
 
     def __str__(self) -> str:
@@ -145,11 +145,11 @@ class SoftActorCritic():
         # Train the agent
         actor, q1, q2, v, vtg = self.train(actor, q1, q2, v, vtg, list_states, list_actions)
 
-        # Plot the losses
-        self.plot_losses(self.losses)
-
         # Save the model
         self.save_model(actor, q1, q2, v, vtg)
+
+        # Plot the losses
+        self.plot_losses(self.losses)
 
     def create_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
         """
@@ -221,6 +221,18 @@ class SoftActorCritic():
             v.load_state_dict(torch.load(f"{self.save_path}\\v.pth", weights_only=True))
             vtg.load_state_dict(torch.load(f"{self.save_path}\\vtg.pth", weights_only=True))
 
+        if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}\\buffer.pth"):
+            print("Loading previous replay buffer...")
+            with warnings.catch_warnings():
+                # Ignore the FutureWarning about loading with pickle
+                warnings.simplefilter("ignore", category=FutureWarning)
+                storage: ListStorage = torch.load(f"{self.save_path}\\buffer.pth")
+            self.replay_buffer = ReplayBuffer(storage=storage)
+        else:
+            print("Creating new replay buffer...")
+            storage = ListStorage(max_size=self.replay_buffer_size)
+            self.replay_buffer = ReplayBuffer(storage=storage)
+
         return actor, q1, q2, v, vtg
 
     def warm_up(self, actor: Actor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
@@ -262,8 +274,11 @@ class SoftActorCritic():
 
         print("Starting warm up...")
 
+        # Number of warm up steps required to fill the replay buffer
+        warm_up_steps = self.replay_buffer_size - len(self.replay_buffer)
+
         # Loop over all iterations
-        for w in range(self.warm_up_steps):
+        for w in range(warm_up_steps):
             # Loop over all agents
             for idx, agt in enumerate(self.agents):
                 states = list_states[idx]
@@ -352,7 +367,7 @@ class SoftActorCritic():
 
             if not w == 0 and not self.debug:
                 sys.stdout.write("\033[F")
-            print(f"Warm up step {w+1}/{self.warm_up_steps} done!")
+            print(f"Warm up step {w+1}/{warm_up_steps} done!")
 
         print("✔ Warm up done!")
         
@@ -618,3 +633,4 @@ class SoftActorCritic():
         torch.save(q2.state_dict(), f"{self.save_path}\\q2.pth")
         torch.save(v.state_dict(), f"{self.save_path}\\v.pth")
         torch.save(vtg.state_dict(), f"{self.save_path}\\vtg.pth")
+        torch.save(self.replay_buffer.storage, f"{self.save_path}\\buffer.pth")
