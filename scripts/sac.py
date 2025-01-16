@@ -276,6 +276,7 @@ class SoftActorCritic():
 
         # Number of warm up steps required to fill the replay buffer
         warm_up_steps = self.replay_buffer_size - len(self.replay_buffer)
+        warm_up_steps = warm_up_steps // len(self.agents) + warm_up_steps % len(self.agents)
 
         # Loop over all iterations
         for w in range(warm_up_steps):

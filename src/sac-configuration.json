@@ -1,8 +1,8 @@
 {
     "General": {
         "debug": false,
-        "load_model": false,
-        "load_buffer": false
+        "load_model": true,
+        "load_buffer": true
     },
     "Environment": {
         "state_dim": 8,
