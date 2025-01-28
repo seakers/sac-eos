@@ -213,20 +213,23 @@ class SoftActorCritic():
         vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
 
         # Load the previous models if they exist
-        if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}\\model.pth"):
+        if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):
             print("Loading previous models...")
-            actor.model.load_state_dict(torch.load(f"{self.save_path}\\model.pth", weights_only=True))
-            q1.load_state_dict(torch.load(f"{self.save_path}\\q1.pth", weights_only=True))
-            q2.load_state_dict(torch.load(f"{self.save_path}\\q2.pth", weights_only=True))
-            v.load_state_dict(torch.load(f"{self.save_path}\\v.pth", weights_only=True))
-            vtg.load_state_dict(torch.load(f"{self.save_path}\\vtg.pth", weights_only=True))
+            actor.model.load_state_dict(torch.load(f"{self.save_path}/model.pth", weights_only=True))
+            q1.load_state_dict(torch.load(f"{self.save_path}/q1.pth", weights_only=True))
+            q2.load_state_dict(torch.load(f"{self.save_path}/q2.pth", weights_only=True))
+            v.load_state_dict(torch.load(f"{self.save_path}/v.pth", weights_only=True))
+            vtg.load_state_dict(torch.load(f"{self.save_path}/vtg.pth", weights_only=True))
 
-        if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}\\buffer.pth"):
+        if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}/buffer.pth"):
             print("Loading previous replay buffer...")
             with warnings.catch_warnings():
                 # Ignore the FutureWarning about loading with pickle
                 warnings.simplefilter("ignore", category=FutureWarning)
-                storage: ListStorage = torch.load(f"{self.save_path}\\buffer.pth")
+                # storage: ListStorage = torch.load(f"{self.save_path}/buffer.pth") # This is the old way for Windows
+                plain_list = torch.load(f"{self.save_path}/buffer.pth")
+                storage = ListStorage(max_size=self.replay_buffer_size)
+                storage._storage = plain_list
             self.replay_buffer = ReplayBuffer(storage=storage)
         else:
             print("Creating new replay buffer...")
@@ -623,15 +626,15 @@ class SoftActorCritic():
         ax[1, 1].plot(smoothed_pi)
         ax[1, 1].set_title("Policy loss")
 
-        plt.savefig(f"{self.save_path}\\losses.png", dpi=500)
+        plt.savefig(f"{self.save_path}/losses.png", dpi=500)
     
     def save_model(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork):
         """
         Save the model to the specified path.
         """
-        torch.save(actor.model.state_dict(), f"{self.save_path}\\model.pth")
-        torch.save(q1.state_dict(), f"{self.save_path}\\q1.pth")
-        torch.save(q2.state_dict(), f"{self.save_path}\\q2.pth")
-        torch.save(v.state_dict(), f"{self.save_path}\\v.pth")
-        torch.save(vtg.state_dict(), f"{self.save_path}\\vtg.pth")
-        torch.save(self.replay_buffer.storage, f"{self.save_path}\\buffer.pth")
+        torch.save(actor.model.state_dict(), f"{self.save_path}/model.pth")
+        torch.save(q1.state_dict(), f"{self.save_path}/q1.pth")
+        torch.save(q2.state_dict(), f"{self.save_path}/q2.pth")
+        torch.save(v.state_dict(), f"{self.save_path}/v.pth")
+        torch.save(vtg.state_dict(), f"{self.save_path}/vtg.pth")
+        torch.save(list(self.replay_buffer.storage), f"{self.save_path}/buffer.pth")

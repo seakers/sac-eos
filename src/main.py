@@ -22,7 +22,7 @@ if __name__ == "__main__":
         client = Client(gym_host=args.host, gym_port=args.port)
 
         # Load the configuration file
-        with open(f"{sys.path[0]}\\sac-configuration.json", "r") as file:
+        with open(f"{sys.path[0]}/sac-configuration.json", "r") as file:
             config = json.load(file)
 
         # Create configuration object
