@@ -22,7 +22,7 @@ class Actor(nn.Module):
     """
     Class to represent an Actor (policy, model) in the context of the SAC algorithm. Children class of nn.Module.
     """
-    def __init__(self, model: EOSModel, lr: float=1e-3):
+    def __init__(self, model: TransformerModelEOS, lr: float=1e-3):
         super(Actor, self).__init__()
         self.role_type = "Actor"
         self.model = model
@@ -155,6 +155,26 @@ class SoftActorCritic():
         """
         Create the entities for the SAC algorithm.
         """
+        # Add the configuration fiel properties of the architecture chosen
+        for i in range(len(self.architectures_available)):
+            if self.architectures_available[i]["name"] == self.architecture_used:
+                architecture_conf = DataFromJSON(self.architectures_available[i], "architecture_conf")
+                break
+
+        self.set_properties(architecture_conf)
+
+        # Select the exact configuration for the model
+        if self.architecture_used == "Transformer":
+            actor, q1, q2, v, vtg = self.create_transformer_entities()
+        elif self.architecture_used == "MLP":
+            actor, q1, q2, v, vtg = self.create_mlp_entities()
+
+        return actor, q1, q2, v, vtg
+
+    def create_transformer_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
+        """
+        Create the entities for the SAC algorithm with the Transformer architecture.
+        """
         # Create the embedder object for states
         states_embedder = FloatEmbedder(
             input_dim=self.state_dim,
@@ -193,7 +213,7 @@ class SoftActorCritic():
         )
         
         # Create the model object
-        model = EOSModel(
+        model = TransformerModelEOS(
             state_embedder=states_embedder,
             action_embedder=actions_embedder,
             pos_encoder=pos_encoder,
@@ -211,6 +231,55 @@ class SoftActorCritic():
         # Create the NNs for the V-networks
         v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
         vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
+
+        # Load the previous models if they exist
+        if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):
+            print("Loading previous models...")
+            actor.model.load_state_dict(torch.load(f"{self.save_path}/model.pth", weights_only=True))
+            q1.load_state_dict(torch.load(f"{self.save_path}/q1.pth", weights_only=True))
+            q2.load_state_dict(torch.load(f"{self.save_path}/q2.pth", weights_only=True))
+            v.load_state_dict(torch.load(f"{self.save_path}/v.pth", weights_only=True))
+            vtg.load_state_dict(torch.load(f"{self.save_path}/vtg.pth", weights_only=True))
+
+        if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}/buffer.pth"):
+            print("Loading previous replay buffer...")
+            with warnings.catch_warnings():
+                # Ignore the FutureWarning about loading with pickle
+                warnings.simplefilter("ignore", category=FutureWarning)
+                # storage: ListStorage = torch.load(f"{self.save_path}/buffer.pth") # This is the old way for Windows
+                plain_list = torch.load(f"{self.save_path}/buffer.pth")
+                storage = ListStorage(max_size=self.replay_buffer_size)
+                storage._storage = plain_list
+            self.replay_buffer = ReplayBuffer(storage=storage)
+        else:
+            print("Creating new replay buffer...")
+            storage = ListStorage(max_size=self.replay_buffer_size)
+            self.replay_buffer = ReplayBuffer(storage=storage)
+
+        return actor, q1, q2, v, vtg
+    
+    def create_mlp_entities(self):
+        """
+        Create the entities for the SAC algorithm with the MLP architecture.
+        """
+        # Create the MLP model
+        model = MLPModelEOS(
+            state_dim=self.state_dim * self.max_len,
+            action_dim=self.action_dim,
+            n_hidden=self.hidden_layers,
+            dropout=self.dropout
+        )
+
+        # Create the actor
+        actor = Actor(model, lr=self.lambda_pi)
+
+        # Create the NNs for the Q-networks
+        q1 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
+        q2 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
+
+        # Create the NNs for the V-networks
+        v = VNetwork(self.state_dim * self.max_len, 1, lr=self.lambda_v)
+        vtg = VNetwork(self.state_dim * self.max_len, 1, lr=self.lambda_v)
 
         # Load the previous models if they exist
         if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):

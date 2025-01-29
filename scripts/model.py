@@ -2,6 +2,12 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
+#####################################################
+#
+# TRANFORMER ARCHITECTURE. BOTH ENCODER AND DECODER.
+#
+#####################################################
+
 class FloatEmbedder(nn.Module):
     """"
     Class to embed the float (continuous) values of the states and actions. Child class of nn.Module.
@@ -138,7 +144,7 @@ class StochasticProjector(nn.Module):
         x = self.fc(x).clone()
         return x
     
-class EOSModel(nn.Module):
+class TransformerModelEOS(nn.Module):
     """
     Class to create the Earth Observation Satellite model. Child class of nn.Module. Parts:
         · 1a. embedder for the states
@@ -155,7 +161,7 @@ class EOSModel(nn.Module):
             transformer: EOSTransformer,
             projector: StochasticProjector
         ):
-        super(EOSModel, self).__init__()
+        super(TransformerModelEOS, self).__init__()
         self.model_type = "Earth Observation Model"
         self.state_embedder = state_embedder
         self.action_embedder = action_embedder
@@ -212,6 +218,128 @@ class EOSModel(nn.Module):
 
         return stochastic_actions
         
+    def sample(self, stochastic_actions, batched):
+        if batched:
+            # Create a sampled actions tensor with the same shape as the stochastic actions tensor
+            _, seq_len, action_dim, _ = stochastic_actions.shape
+            sampled_actions = torch.empty((0, seq_len, action_dim), requires_grad=True)
+
+            for batch in stochastic_actions: # for each batch (set of sequences)
+                # Create a tensor for the batch
+                batch_sampled_actions = torch.empty((0, action_dim), requires_grad=True)
+                for action in batch:
+                    # Create a tensor for the sequence
+                    seq_sampled_actions = torch.empty((0), requires_grad=True)
+                    for feature in action:
+                        mean = feature[0]
+                        log_std = feature[1]
+                        std = torch.exp(log_std)
+
+                        result = mean + std * self.epsilon.rsample()
+                        seq_sampled_actions = torch.cat([seq_sampled_actions, result.unsqueeze(0)], dim=0)
+                    
+                    batch_sampled_actions = torch.cat([batch_sampled_actions, seq_sampled_actions.unsqueeze(0)], dim=0)
+                
+                sampled_actions = torch.cat([sampled_actions, batch_sampled_actions.unsqueeze(0)], dim=0)
+
+            return sampled_actions
+        else:
+            # Create a sampled actions tensor with the same shape as the stochastic actions tensor
+            _, action_dim, _ = stochastic_actions.shape
+            sampled_actions = torch.empty((0, action_dim), requires_grad=True)
+
+            for action in stochastic_actions:
+                # Create a tensor for the action
+                action_sampled_actions = torch.empty((0), requires_grad=True)
+                for feature in action:
+                    mean = feature[0]
+                    log_std = feature[1]
+                    std = torch.exp(log_std)
+
+                    result = mean + std * self.epsilon.rsample()
+                    action_sampled_actions = torch.cat([action_sampled_actions, result.unsqueeze(0)], dim=0)
+
+                sampled_actions = torch.cat([sampled_actions, action_sampled_actions.unsqueeze(0)], dim=0)
+
+            return sampled_actions
+    
+    def reparametrization_trick(self, stochastic_actions):
+        # Number of dimensions of the tensor
+        dim = stochastic_actions.dim()
+
+        if dim == 4:
+            # Create the specific output actions tensor
+            sampled_actions = self.sample(stochastic_actions, True) # already in a sequence and batched
+        elif dim == 3:
+            # Create the specific output actions tensor
+            sampled_actions = self.sample(stochastic_actions, False)
+        elif dim == 2:
+            # Create the specific output actions tensor
+            sampled_actions = self.sample(stochastic_actions.unsqueeze(0), False).squeeze() # not in a sequence nor batched
+        else:
+            raise ValueError("The tensor must have 2, 3 or 4 dimensions")
+        
+        return sampled_actions, torch.tanh(sampled_actions)
+    
+#########################################################
+#
+# MULTI-LAYER PERCEPTRON ARCHITECTURE. SIMPLE AND DENSE.
+#
+#########################################################
+
+class MLPModelEOS(nn.Module):
+    """
+    Class to create a Multi-Layer Perceptron model. Child class of nn.Module.
+    """
+    def __init__(self, state_dim: int, action_dim: int, n_hidden: tuple[int], dropout: float):
+        super(MLPModelEOS, self).__init__()
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.n_hidden = n_hidden
+        self.epsilon = torch.distributions.Normal(0, 1)
+
+        layers = []
+        layers.append(nn.Linear(state_dim, n_hidden[0]))
+        layers.append(nn.ReLU())
+
+        for i in range(len(n_hidden) - 1):
+            layers.append(nn.Linear(n_hidden[i], n_hidden[i + 1]))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(p=dropout))
+        
+        layers.append(nn.Linear(n_hidden[-1], 2*action_dim))
+        self.mlp = nn.Sequential(*layers)
+
+        self.init_weights()
+
+    def init_weights(self):
+        initrange = 0.1
+        for layer in self.mlp:
+            if isinstance(layer, nn.Linear):
+                init.uniform_(layer.weight, -initrange, initrange)
+                init.zeros_(layer.bias)
+
+    def forward(self, x: torch.Tensor, *args):
+        # Rearange the input tensor so that all past states are concatenated
+        x = x.view(x.shape[0], -1).unsqueeze(0) # (batch_size, seq_len, state_dim) -> (1, batch_size, seq_len * state_dim)
+
+        # Check it has 2 dimensions
+        if x.dim() != 3:
+            raise ValueError("The input tensor must have 3 dimensions: (batch_size, seq_len, state_dim)")
+        
+        # Check if the input tensor has the right number of sequences
+        if x.shape[-1] != self.state_dim:
+            # Add zeros to the tensor where x has size (batch_size, seq_len, state_dim)
+            x = torch.cat([x, torch.zeros(x.shape[0], x.shape[1], self.state_dim - x.shape[-1])], dim=-1)
+        
+        # Pass the input tensor through the MLP
+        stochastic_actions = self.mlp(x)
+
+        # Group the actions by features with their mean and variance
+        stochastic_actions = stochastic_actions.view(stochastic_actions.shape[1], stochastic_actions.shape[1], self.action_dim, 2)
+
+        return stochastic_actions
+    
     def sample(self, stochastic_actions, batched):
         if batched:
             # Create a sampled actions tensor with the same shape as the stochastic actions tensor

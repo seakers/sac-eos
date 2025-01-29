@@ -1,26 +1,43 @@
 {
     "General": {
         "debug": false,
-        "load_model": true,
-        "load_buffer": true
+        "load_model": false,
+        "load_buffer": false
     },
     "Environment": {
         "state_dim": 8,
         "action_dim": 2,
         "time_increment": 60,
-        "agents": [0]
+        "agents": [
+            0
+        ]
     },
     "Architecture": {
-        "d_model": 32,
-        "max_len": 100,
-        "pos_dropout": 0.1,
-        "nhead": 8,
-        "num_encoder_layers": 1,
-        "num_decoder_layers": 1,
-        "dim_feedforward": 2048,
-        "transformer_dropout": 0.1,
-        "activation": "relu",
-        "batch_first": true
+        "architecture_used": "MLP",
+        "architectures_available": [
+            {
+                "name": "Transformer",
+                "d_model": 32,
+                "max_len": 100,
+                "pos_dropout": 0.1,
+                "nhead": 8,
+                "num_encoder_layers": 1,
+                "num_decoder_layers": 1,
+                "dim_feedforward": 2048,
+                "transformer_dropout": 0.1,
+                "activation": "relu",
+                "batch_first": true
+            },
+            {
+                "name": "MLP",
+                "max_len": 100,
+                "hidden_layers": [
+                    256,
+                    256
+                ],
+                "dropout": 0.1
+            }
+        ]
     },
     "Soft Actor-Critic": {
         "replay_buffer_size": 1000000,
