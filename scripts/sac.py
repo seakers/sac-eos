@@ -35,24 +35,24 @@ class Critic(nn.Module):
     """
     Class to represent a Critic in the context of the SAC algorithm. Children class of nn.Module.
     """
-    def __init__(self, in_dim: int, out_dim: int, hidden_dim: tuple[int]=[256, 64, 256, 64], lr: float=1e-3):
+    def __init__(self, in_dim: int, out_dim: int, n_hidden: tuple[int], lr: float=1e-3):
         super(Critic, self).__init__()
         self.role_type = "Critic"
         self.in_dim = in_dim
         self.out_dim = out_dim
-        self.hidden_dim = hidden_dim
+        self.n_hidden = n_hidden
         self.lr = lr
 
         layers = []
         
-        for i in range(len(hidden_dim)):
+        for i in range(len(n_hidden)):
             if i == 0:
-                layers.append(nn.Linear(in_dim, hidden_dim[i]))
+                layers.append(nn.Linear(in_dim, n_hidden[i]))
             else:
-                layers.append(nn.Linear(hidden_dim[i-1], hidden_dim[i]))
+                layers.append(nn.Linear(n_hidden[i-1], n_hidden[i]))
             layers.append(nn.ReLU())
 
-        layers.append(nn.Linear(hidden_dim[-1], out_dim))
+        layers.append(nn.Linear(n_hidden[-1], out_dim))
 
         self.sequential = nn.Sequential(*layers)
 
@@ -72,39 +72,73 @@ class QNetwork(Critic):
     """
     Class to represent a Q-network. Children class of Critic.
     """
-    def __init__(self, state_dim: int, action_dim: int, out_dim: int, hidden_dim: tuple[int]=[256, 64, 256, 64], lr: float=1e-3):
-        super(QNetwork, self).__init__(in_dim=(state_dim + action_dim), out_dim=out_dim, hidden_dim=hidden_dim, lr=lr)
+    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
+        # Adjust the size of the augmented state based on the architecture
+        if aug_state_contains_actions:
+            aug_state_size = (state_dim + action_dim) * max_len
+        else:
+            aug_state_size = state_dim * max_len
+        
+        # Create the class with the parent class initializer
+        super(QNetwork, self).__init__(in_dim=(aug_state_size + action_dim), out_dim=out_dim, n_hidden=n_hidden, lr=lr)
         self.critic_type = "Q-network"
         self.state_dim = state_dim
         self.action_dim = action_dim
+        self.max_len = max_len
+        self.aug_state_contains_actions = aug_state_contains_actions
 
-    def forward(self, state, action):
-        # Fill the state with zeros if it is not the same size as the input dimension
-        if state.shape[0] < self.in_dim:
-            state = torch.cat([state, torch.zeros(self.state_dim - state.shape[0])])
-        elif state.shape[0] > self.in_dim:
-            state = state[-self.in_dim:]
+    def forward(self, states, actions, new_action):
+        if states.shape[-2] != actions.shape[-2]:
+            raise ValueError("The states and actions sequences must have the same length!")
 
-        x = torch.cat([state, action])
+        # Fill the state and actions tensors so that there are max_len elements
+        if states.shape[-2] < self.max_len:
+            states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1])], dim=-2)
+            actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1])], dim=-2)
+
+        if self.aug_state_contains_actions:
+            aug_state_1D = torch.cat([states, actions], dim=2).view(-1)
+        else:
+            aug_state_1D = states.view(-1)
+
+        x = torch.cat([aug_state_1D, new_action])
         x = super(QNetwork, self).forward(x)
         return x
     
 class VNetwork(Critic):
+
     """
     Class to represent a V-network. Children class of Critic.
     """
-    def __init__(self, state_dim, out_dim, hidden_dim: tuple[int]=[256, 64, 256, 64], lr: float=1e-3):
-        super(VNetwork, self).__init__(in_dim=state_dim, out_dim=out_dim, hidden_dim=hidden_dim, lr=lr)
+    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
+        # Adjust the size of the augmented state based on the architecture
+        if aug_state_contains_actions:
+            aug_state_size = (state_dim + action_dim) * max_len
+        else:
+            aug_state_size = state_dim * max_len
+
+        super(VNetwork, self).__init__(in_dim=aug_state_size, out_dim=out_dim, n_hidden=n_hidden, lr=lr)
         self.critic_type = "V-network"
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.max_len = max_len
+        self.aug_state_contains_actions = aug_state_contains_actions
 
-    def forward(self, state):
-        # Fill the state with zeros if it is not the same size as the input dimension
-        if state.shape[0] < self.in_dim:
-            state = torch.cat([state, torch.zeros(self.in_dim - state.shape[0])])
-        elif state.shape[0] > self.in_dim:
-            state = state[-self.in_dim:]
+    def forward(self, states, actions):
+        if states.shape[-2] != actions.shape[-2]:
+            raise ValueError("The states and actions sequences must have the same length!")
 
-        x = state
+        # Fill the state and actions tensors so that there are max_len elements
+        if states.shape[-2] < self.max_len:
+            states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1])], dim=-2)
+            actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1])], dim=-2)
+
+        if self.aug_state_contains_actions:
+            aug_state_1D = torch.cat([states, actions], dim=2).view(-1)
+        else:
+            aug_state_1D = states.view(-1)
+
+        x = aug_state_1D
         x = super(VNetwork, self).forward(x)
         return x
 
@@ -225,36 +259,10 @@ class SoftActorCritic():
         actor = Actor(model, lr=self.lambda_pi)
 
         # Create the NNs for the Q-networks
-        q1 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
-        q2 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
-
-        # Create the NNs for the V-networks
-        v = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
-        vtg = VNetwork((self.state_dim + self.action_dim) * self.max_len, 1, lr=self.lambda_v)
+        q1, q2, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
 
         # Load the previous models if they exist
-        if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):
-            print("Loading previous models...")
-            actor.model.load_state_dict(torch.load(f"{self.save_path}/model.pth", weights_only=True))
-            q1.load_state_dict(torch.load(f"{self.save_path}/q1.pth", weights_only=True))
-            q2.load_state_dict(torch.load(f"{self.save_path}/q2.pth", weights_only=True))
-            v.load_state_dict(torch.load(f"{self.save_path}/v.pth", weights_only=True))
-            vtg.load_state_dict(torch.load(f"{self.save_path}/vtg.pth", weights_only=True))
-
-        if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}/buffer.pth"):
-            print("Loading previous replay buffer...")
-            with warnings.catch_warnings():
-                # Ignore the FutureWarning about loading with pickle
-                warnings.simplefilter("ignore", category=FutureWarning)
-                # storage: ListStorage = torch.load(f"{self.save_path}/buffer.pth") # This is the old way for Windows
-                plain_list = torch.load(f"{self.save_path}/buffer.pth")
-                storage = ListStorage(max_size=self.replay_buffer_size)
-                storage._storage = plain_list
-            self.replay_buffer = ReplayBuffer(storage=storage)
-        else:
-            print("Creating new replay buffer...")
-            storage = ListStorage(max_size=self.replay_buffer_size)
-            self.replay_buffer = ReplayBuffer(storage=storage)
+        actor, q1, q2, v, vtg = self.load_previous_models(actor, q1, q2, v, vtg)
 
         return actor, q1, q2, v, vtg
     
@@ -274,13 +282,31 @@ class SoftActorCritic():
         actor = Actor(model, lr=self.lambda_pi)
 
         # Create the NNs for the Q-networks
-        q1 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
-        q2 = QNetwork((self.state_dim + self.action_dim) * self.max_len, self.action_dim, 1, lr=self.lambda_q)
+        q1, q2, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
+
+        # Load the previous models if they exist
+        actor, q1, q2, v, vtg = self.load_previous_models(actor, q1, q2, v, vtg)
+
+        return actor, q1, q2, v, vtg
+    
+    def create_nn_critics(self, aug_state_contains_actions: bool=True) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
+        """
+        Create the neural networks for the Q-networks and the V-networks.
+        """
+        # Create the NNs for the Q-networks
+        q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
+        q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
 
         # Create the NNs for the V-networks
-        v = VNetwork(self.state_dim * self.max_len, 1, lr=self.lambda_v)
-        vtg = VNetwork(self.state_dim * self.max_len, 1, lr=self.lambda_v)
+        v = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
+        vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
 
+        return q1, q2, v, vtg
+    
+    def load_previous_models(self, actor: Actor, q1: nn.Module, q2: nn.Module, v: nn.Module, vtg: nn.Module):
+        """
+        Load the previous models if they exist.
+        """
         # Load the previous models if they exist
         if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):
             print("Loading previous models...")
@@ -569,11 +595,8 @@ class SoftActorCritic():
                 # Sample and convert the action
                 a_new_pretanh, a_new = actor.model.reparametrization_trick(a_new_sto)
 
-                # Reshape the augmented state to input to the Q-networks and the V-network as a single 1D tensor
-                aug_state_1D = torch.cat([aug_state[0], aug_state[1]], dim=2).view(-1)
-
                 # Find the minimum of the Q-networks
-                qmin = torch.min(q1(aug_state_1D, a_new), q2(aug_state_1D, a_new))
+                qmin = torch.min(q1(aug_state[0], aug_state[1], a_new), q2(aug_state[0], aug_state[1], a_new))
 
                 # Log probability
                 sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
@@ -596,13 +619,10 @@ class SoftActorCritic():
                 # It is not the same the target VALUE of v (in a certain step) and the target NETWORK of v
                 # -----------------------------------------------------------------------------------------
 
-                # Reshape the augmented state to input to the target V-network as a single 1D tensor
-                aug_state_next_1D = torch.cat([aug_state_next[0], aug_state_next[1]], dim=2).view(-1)
-
                 # Target value for each loss
                 with torch.no_grad():
                     target_v = qmin - self.temperature * log_prob
-                    target_q = r + self.discount * vtg(aug_state_next_1D)
+                    target_q = r + self.discount * vtg(aug_state_next[0], aug_state_next[1])
 
                 # Set the gradients to zero
                 optimizer_v.zero_grad()
@@ -611,9 +631,9 @@ class SoftActorCritic():
                 optimizer_pi.zero_grad()
 
                 # Compute the losses
-                J_v: torch.Tensor = 0.5 * F.mse_loss(v(aug_state_1D), target_v)
-                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1(aug_state_1D, a), target_q)
-                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2(aug_state_1D, a), target_q)
+                J_v: torch.Tensor = 0.5 * F.mse_loss(v(aug_state[0], aug_state[1]), target_v)
+                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1(aug_state[0], aug_state[1], a), target_q)
+                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2(aug_state[0], aug_state[1], a), target_q)
                 J_pi: torch.Tensor = self.temperature * log_prob - qmin
 
                 if self.debug:

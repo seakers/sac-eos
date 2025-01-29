@@ -8,15 +8,14 @@
         "state_dim": 8,
         "action_dim": 2,
         "time_increment": 60,
-        "agents": [
-            0
-        ]
+        "agents": [0]
     },
     "Architecture": {
         "architecture_used": "MLP",
         "architectures_available": [
             {
                 "name": "Transformer",
+                "aug_state_contains_actions": true,
                 "d_model": 32,
                 "max_len": 100,
                 "pos_dropout": 0.1,
@@ -26,21 +25,21 @@
                 "dim_feedforward": 2048,
                 "transformer_dropout": 0.1,
                 "activation": "relu",
-                "batch_first": true
+                "batch_first": true,
+                "critics_hidden_layers": [1024, 512, 1024]
             },
             {
                 "name": "MLP",
+                "aug_state_contains_actions": false,
                 "max_len": 100,
-                "hidden_layers": [
-                    256,
-                    256
-                ],
-                "dropout": 0.1
+                "hidden_layers": [1024, 512, 1024],
+                "dropout": 0.1,
+                "critics_hidden_layers": [1024, 512, 1024]
             }
         ]
     },
     "Soft Actor-Critic": {
-        "replay_buffer_size": 1000000,
+        "replay_buffer_size": 1000,
         "environment_steps": 5,
         "gradient_steps": 5,
         "reward_scale": 0.1,
