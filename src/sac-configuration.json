@@ -39,7 +39,7 @@
         ]
     },
     "Soft Actor-Critic": {
-        "replay_buffer_size": 1000,
+        "replay_buffer_size": 1000000,
         "environment_steps": 5,
         "gradient_steps": 5,
         "reward_scale": 0.1,
