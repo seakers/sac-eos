@@ -5,27 +5,30 @@
         "load_buffer": false
     },
     "Environment": {
-        "state_dim": 8,
+        "state_dim": 17,
         "action_dim": 2,
+        "a_conversions": [90, 180],
         "time_increment": 60,
         "agents": [0]
     },
     "Architecture": {
-        "architecture_used": "MLP",
+        "architecture_used": "Transformer",
         "architectures_available": [
             {
                 "name": "Transformer",
                 "aug_state_contains_actions": true,
-                "d_model": 32,
+                "d_model": 512,
                 "max_len": 100,
+                "embed_dropout": 0.1,
                 "pos_dropout": 0.1,
                 "nhead": 8,
-                "num_encoder_layers": 1,
-                "num_decoder_layers": 1,
+                "num_encoder_layers": 2,
+                "num_decoder_layers": 2,
                 "dim_feedforward": 2048,
                 "transformer_dropout": 0.1,
                 "activation": "relu",
                 "batch_first": true,
+                "kaiming_init": false,
                 "critics_hidden_layers": [1024, 512, 1024]
             },
             {
@@ -39,7 +42,7 @@
         ]
     },
     "Soft Actor-Critic": {
-        "replay_buffer_size": 1000000,
+        "replay_buffer_size": 100,
         "environment_steps": 5,
         "gradient_steps": 5,
         "reward_scale": 0.1,

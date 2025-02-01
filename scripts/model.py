@@ -2,9 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
+# from scripts.utils import Reparametrizer
+
 #####################################################
 #
-# TRANFORMER ARCHITECTURE. BOTH ENCODER AND DECODER.
+# TRANSFORMER ARCHITECTURE. BOTH ENCODER AND DECODER.
 #
 #####################################################
 
@@ -12,34 +14,33 @@ class FloatEmbedder(nn.Module):
     """"
     Class to embed the float (continuous) values of the states and actions. Child class of nn.Module.
     """
-    def __init__(self, input_dim: int, embed_dim: int, num_layers: int=3, hidden_dim: int=64): # input_dim is state_dim or action_dim
+    def __init__(self, input_dim: int, embed_dim: int, dropout: float): # input_dim is state_dim or action_dim
         super(FloatEmbedder, self).__init__()
         self.input_dim = input_dim
         self.embed_dim = embed_dim
+        self.dropout = nn.Dropout(p=dropout)
         
         layers = []
-        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.Linear(input_dim, self.embed_dim // 4))
         layers.append(nn.ReLU())
-
-        for _ in range(num_layers - 2): # -2 because we already have 2 layers (input to 1st hidden and -1th hidden to output)
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
-            layers.append(nn.ReLU())
-
-        layers.append(nn.Linear(hidden_dim, embed_dim))
+        layers.append(nn.Linear(self.embed_dim // 4, self.embed_dim // 2))
+        layers.append(nn.ReLU())
+        layers.append(nn.Linear(self.embed_dim // 2, self.embed_dim))
+        layers.append(nn.LayerNorm(self.embed_dim))
         self.embed = nn.Sequential(*layers)
 
         self.init_weights()
 
     def init_weights(self):
-        initrange = 0.1
         for layer in self.embed:
             if isinstance(layer, nn.Linear):
-                init.uniform_(layer.weight, -initrange, initrange)
+                init.kaiming_uniform_(layer.weight)
                 init.zeros_(layer.bias)
 
     def forward(self, x):
         x = self.embed(x)
-        return x # ¿* math.sqrt(self.d_model)?
+        x = self.dropout(x)
+        return x
     
 class PositionalEncoder(nn.Module):
     """
@@ -84,7 +85,8 @@ class EOSTransformer(nn.Transformer):
             dim_feedforward: int,
             dropout: float,
             activation: str,
-            batch_first: bool = True
+            batch_first: bool = True,
+            kaiming_init: bool = False
         ):
         super(EOSTransformer, self).__init__(
             d_model=d_model,
@@ -98,28 +100,27 @@ class EOSTransformer(nn.Transformer):
         )
         self.architecture_type = "Transformer"
 
-        self.init_weights()
+        if kaiming_init:
+            self.override_linears_with_kaiming()
 
-    def init_weights(self):
-        initrange = 0.1
-
+    def override_linears_with_kaiming(self):
         # Encoder
         for layer in self.encoder.layers:
             for module in layer.children():
                 if type(module) == torch.nn.Linear:
+                    nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                     nn.init.zeros_(module.bias)
-                    nn.init.uniform_(module.weight, -initrange, initrange)
 
         # Decoder
         for layer in self.decoder.layers:
             for module in layer.children():
                 if type(module) == torch.nn.Linear:
+                    nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
                     nn.init.zeros_(module.bias)
-                    nn.init.uniform_(module.weight, -initrange, initrange)
 
     def _generate_square_subsequent_mask(self, sz):
         mask = torch.triu(torch.ones(sz, sz), diagonal=1)
-        mask = mask.masked_fill(mask == 1, float('-inf'))
+        mask = mask.masked_fill(mask == 1, float("-inf"))
         return mask
     
 class StochasticProjector(nn.Module):
@@ -130,18 +131,23 @@ class StochasticProjector(nn.Module):
         super(StochasticProjector, self).__init__()
         self.d_model = d_model
         self.action_dim = action_dim
-        self.fc = nn.Linear(d_model, int(2 * action_dim))
+        self.output_dim = int(2 * self.action_dim)
 
-        self.init_weights()
+        layers = []
+        layers.append(nn.Linear(self.d_model, self.d_model // 2))
+        layers.append(nn.LeakyReLU())
+        layers.append(nn.Linear(self.d_model // 2, self.output_dim))
+        layers.append(nn.LayerNorm(self.output_dim))
+        self.project = nn.Sequential(*layers)
 
     def init_weights(self):
-        initrange = 0.1
-
-        nn.init.zeros_(self.fc.bias)
-        nn.init.uniform_(self.fc.weight, -initrange, initrange)
+        for layer in self.project:
+            if isinstance(layer, nn.Linear):
+                init.kaiming_uniform_(layer.weight, nonlinearity="leaky_relu")
+                init.zeros_(layer.bias)
 
     def forward(self, x):
-        x = self.fc(x).clone()
+        x = self.project(x)
         return x
     
 class TransformerModelEOS(nn.Module):
@@ -159,7 +165,8 @@ class TransformerModelEOS(nn.Module):
             action_embedder: FloatEmbedder,
             pos_encoder: PositionalEncoder,
             transformer: EOSTransformer,
-            projector: StochasticProjector
+            projector: StochasticProjector,
+            a_conversions: torch.tensor
         ):
         super(TransformerModelEOS, self).__init__()
         self.model_type = "Earth Observation Model"
@@ -168,7 +175,10 @@ class TransformerModelEOS(nn.Module):
         self.pos_encoder = pos_encoder
         self.transformer = transformer
         self.projector = projector
+        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.a_conversions = a_conversions.to(self.gpu_device)
         self.epsilon = torch.distributions.Normal(0, 1)
+        self.conversion_constant = torch.sqrt(torch.tensor(1 + torch.e**2, device=self.gpu_device))
 
         # Check it is a transformer
         if self.transformer.architecture_type != "Transformer":
@@ -217,19 +227,19 @@ class TransformerModelEOS(nn.Module):
         stochastic_actions = stochastic_actions.view(-1, seq_len, actions.shape[-1], 2)
 
         return stochastic_actions
-        
+    
     def sample(self, stochastic_actions, batched):
         if batched:
             # Create a sampled actions tensor with the same shape as the stochastic actions tensor
             _, seq_len, action_dim, _ = stochastic_actions.shape
-            sampled_actions = torch.empty((0, seq_len, action_dim), requires_grad=True)
+            sampled_actions = torch.empty((0, seq_len, action_dim), requires_grad=True, device=self.gpu_device)
 
             for batch in stochastic_actions: # for each batch (set of sequences)
                 # Create a tensor for the batch
-                batch_sampled_actions = torch.empty((0, action_dim), requires_grad=True)
+                batch_sampled_actions = torch.empty((0, action_dim), requires_grad=True, device=self.gpu_device)
                 for action in batch:
                     # Create a tensor for the sequence
-                    seq_sampled_actions = torch.empty((0), requires_grad=True)
+                    seq_sampled_actions = torch.empty((0), requires_grad=True, device=self.gpu_device)
                     for feature in action:
                         mean = feature[0]
                         log_std = feature[1]
@@ -246,11 +256,11 @@ class TransformerModelEOS(nn.Module):
         else:
             # Create a sampled actions tensor with the same shape as the stochastic actions tensor
             _, action_dim, _ = stochastic_actions.shape
-            sampled_actions = torch.empty((0, action_dim), requires_grad=True)
+            sampled_actions = torch.empty((0, action_dim), requires_grad=True, device=self.gpu_device)
 
             for action in stochastic_actions:
                 # Create a tensor for the action
-                action_sampled_actions = torch.empty((0), requires_grad=True)
+                action_sampled_actions = torch.empty((0), requires_grad=True, device=self.gpu_device)
                 for feature in action:
                     mean = feature[0]
                     log_std = feature[1]
@@ -262,6 +272,12 @@ class TransformerModelEOS(nn.Module):
                 sampled_actions = torch.cat([sampled_actions, action_sampled_actions.unsqueeze(0)], dim=0)
 
             return sampled_actions
+    
+    def convert(self, sampled_actions: torch.tensor, normalized: bool=False):
+        if normalized:
+            return torch.tanh(sampled_actions / self.conversion_constant)
+        else:
+            return torch.tanh(sampled_actions / self.conversion_constant) * self.a_conversions
     
     def reparametrization_trick(self, stochastic_actions):
         # Number of dimensions of the tensor
@@ -279,8 +295,8 @@ class TransformerModelEOS(nn.Module):
         else:
             raise ValueError("The tensor must have 2, 3 or 4 dimensions")
         
-        return sampled_actions, torch.tanh(sampled_actions)
-    
+        return sampled_actions, self.convert(sampled_actions, normalized=False), self.convert(sampled_actions, normalized=True)  # conversion based on the implementation procedure and the actions dimension
+       
 #########################################################
 #
 # MULTI-LAYER PERCEPTRON ARCHITECTURE. SIMPLE AND DENSE.
@@ -291,12 +307,14 @@ class MLPModelEOS(nn.Module):
     """
     Class to create a Multi-Layer Perceptron model. Child class of nn.Module.
     """
-    def __init__(self, state_dim: int, action_dim: int, n_hidden: tuple[int], dropout: float):
+    def __init__(self, state_dim: int, action_dim: int, n_hidden: tuple[int], dropout: float, a_conversions: torch.tensor):
         super(MLPModelEOS, self).__init__()
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.n_hidden = n_hidden
-        self.epsilon = torch.distributions.Normal(0, 1)
+        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.a_conversions = a_conversions.to(self.gpu_device)
+        self.conversion_constant = torch.sqrt(torch.tensor(1 + torch.e**2, device=self.gpu_device))
 
         layers = []
         layers.append(nn.Linear(state_dim, n_hidden[0]))
@@ -313,10 +331,9 @@ class MLPModelEOS(nn.Module):
         self.init_weights()
 
     def init_weights(self):
-        initrange = 0.1
         for layer in self.mlp:
             if isinstance(layer, nn.Linear):
-                init.uniform_(layer.weight, -initrange, initrange)
+                init.xavier_uniform_(layer.weight)
                 init.zeros_(layer.bias)
 
     def forward(self, x: torch.Tensor, *args):
@@ -330,7 +347,7 @@ class MLPModelEOS(nn.Module):
         # Check if the input tensor has the right number of sequences
         if x.shape[-1] != self.state_dim:
             # Add zeros to the tensor where x has size (batch_size, seq_len, state_dim)
-            x = torch.cat([x, torch.zeros(x.shape[0], x.shape[1], self.state_dim - x.shape[-1])], dim=-1)
+            x = torch.cat([x, torch.zeros(x.shape[0], x.shape[1], self.state_dim - x.shape[-1]).to(self.gpu_device)], dim=-1)
         
         # Pass the input tensor through the MLP
         stochastic_actions = self.mlp(x)
@@ -339,19 +356,19 @@ class MLPModelEOS(nn.Module):
         stochastic_actions = stochastic_actions.view(stochastic_actions.shape[1], stochastic_actions.shape[1], self.action_dim, 2)
 
         return stochastic_actions
-    
+
     def sample(self, stochastic_actions, batched):
         if batched:
             # Create a sampled actions tensor with the same shape as the stochastic actions tensor
             _, seq_len, action_dim, _ = stochastic_actions.shape
-            sampled_actions = torch.empty((0, seq_len, action_dim), requires_grad=True)
+            sampled_actions = torch.empty((0, seq_len, action_dim), requires_grad=True, device=self.gpu_device)
 
             for batch in stochastic_actions: # for each batch (set of sequences)
                 # Create a tensor for the batch
-                batch_sampled_actions = torch.empty((0, action_dim), requires_grad=True)
+                batch_sampled_actions = torch.empty((0, action_dim), requires_grad=True, device=self.gpu_device)
                 for action in batch:
                     # Create a tensor for the sequence
-                    seq_sampled_actions = torch.empty((0), requires_grad=True)
+                    seq_sampled_actions = torch.empty((0), requires_grad=True, device=self.gpu_device)
                     for feature in action:
                         mean = feature[0]
                         log_std = feature[1]
@@ -368,11 +385,11 @@ class MLPModelEOS(nn.Module):
         else:
             # Create a sampled actions tensor with the same shape as the stochastic actions tensor
             _, action_dim, _ = stochastic_actions.shape
-            sampled_actions = torch.empty((0, action_dim), requires_grad=True)
+            sampled_actions = torch.empty((0, action_dim), requires_grad=True, device=self.gpu_device)
 
             for action in stochastic_actions:
                 # Create a tensor for the action
-                action_sampled_actions = torch.empty((0), requires_grad=True)
+                action_sampled_actions = torch.empty((0), requires_grad=True, device=self.gpu_device)
                 for feature in action:
                     mean = feature[0]
                     log_std = feature[1]
@@ -384,6 +401,12 @@ class MLPModelEOS(nn.Module):
                 sampled_actions = torch.cat([sampled_actions, action_sampled_actions.unsqueeze(0)], dim=0)
 
             return sampled_actions
+    
+    def convert(self, sampled_actions: torch.tensor, normalized: bool=False):
+        if normalized:
+            return torch.tanh(sampled_actions / self.conversion_constant)
+        else:
+            return torch.tanh(sampled_actions / self.conversion_constant) * self.a_conversions
     
     def reparametrization_trick(self, stochastic_actions):
         # Number of dimensions of the tensor
@@ -401,4 +424,5 @@ class MLPModelEOS(nn.Module):
         else:
             raise ValueError("The tensor must have 2, 3 or 4 dimensions")
         
-        return sampled_actions, torch.tanh(sampled_actions)
+        return sampled_actions, self.convert(sampled_actions, normalized=False), self.convert(sampled_actions, normalized=True)  # conversion based on the implementation procedure and the actions dimension
+ 

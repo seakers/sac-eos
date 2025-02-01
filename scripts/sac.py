@@ -86,6 +86,7 @@ class QNetwork(Critic):
         self.action_dim = action_dim
         self.max_len = max_len
         self.aug_state_contains_actions = aug_state_contains_actions
+        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def forward(self, states, actions, new_action):
         if states.shape[-2] != actions.shape[-2]:
@@ -93,8 +94,8 @@ class QNetwork(Critic):
 
         # Fill the state and actions tensors so that there are max_len elements
         if states.shape[-2] < self.max_len:
-            states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1])], dim=-2)
-            actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1])], dim=-2)
+            states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1], device=self.gpu_device)], dim=-2)
+            actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1], device=self.gpu_device)], dim=-2)
 
         if self.aug_state_contains_actions:
             aug_state_1D = torch.cat([states, actions], dim=2).view(-1)
@@ -123,6 +124,7 @@ class VNetwork(Critic):
         self.action_dim = action_dim
         self.max_len = max_len
         self.aug_state_contains_actions = aug_state_contains_actions
+        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def forward(self, states, actions):
         if states.shape[-2] != actions.shape[-2]:
@@ -130,8 +132,8 @@ class VNetwork(Critic):
 
         # Fill the state and actions tensors so that there are max_len elements
         if states.shape[-2] < self.max_len:
-            states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1])], dim=-2)
-            actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1])], dim=-2)
+            states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1], device=self.gpu_device)], dim=-2)
+            actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1], device=self.gpu_device)], dim=-2)
 
         if self.aug_state_contains_actions:
             aug_state_1D = torch.cat([states, actions], dim=2).view(-1)
@@ -151,9 +153,12 @@ class SoftActorCritic():
         self.__conf = conf
         self.client = client
         self.save_path = save_path
+        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.set_properties(conf)
         self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
         self.tensor_manager = TensorManager()
+        self.a_conversions = torch.tensor(self.a_conversions) # action conversions from transformer post-tanh to real action
+        self.conversion_constant = torch.sqrt(torch.tensor(1 + torch.e**2))
 
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
@@ -172,6 +177,13 @@ class SoftActorCritic():
         """
         # Create the agent and the critics
         actor, q1, q2, v, vtg = self.create_entities()
+
+        # Move items to gpu
+        actor = actor.to(self.gpu_device)
+        q1 = q1.to(self.gpu_device)
+        q2 = q2.to(self.gpu_device)
+        v = v.to(self.gpu_device)
+        vtg = vtg.to(self.gpu_device)
 
         # Warm up the agent
         list_states, list_actions = self.warm_up(actor)
@@ -212,13 +224,15 @@ class SoftActorCritic():
         # Create the embedder object for states
         states_embedder = FloatEmbedder(
             input_dim=self.state_dim,
-            embed_dim=self.d_model
+            embed_dim=self.d_model,
+            dropout=self.embed_dropout
         )
         
         # Create the embedder object for actions
         actions_embedder = FloatEmbedder(
             input_dim=self.action_dim,
-            embed_dim=self.d_model
+            embed_dim=self.d_model,
+            dropout=self.embed_dropout
         )
         
         # Create the positional encoder object
@@ -237,7 +251,8 @@ class SoftActorCritic():
             dim_feedforward=self.dim_feedforward,
             dropout=self.transformer_dropout,
             activation=self.activation,
-            batch_first=self.batch_first
+            batch_first=self.batch_first,
+            kaiming_init=self.kaiming_init
         )
         
         # Create a linear outside stochastic layer called projector
@@ -252,7 +267,8 @@ class SoftActorCritic():
             action_embedder=actions_embedder,
             pos_encoder=pos_encoder,
             transformer=transformer,
-            projector=stochastic_projector
+            projector=stochastic_projector,
+            a_conversions=self.a_conversions
         )
 
         # Create the actor
@@ -275,7 +291,8 @@ class SoftActorCritic():
             state_dim=self.state_dim * self.max_len,
             action_dim=self.action_dim,
             n_hidden=self.hidden_layers,
-            dropout=self.dropout
+            dropout=self.dropout,
+            a_conversions=self.a_conversions
         )
 
         # Create the actor
@@ -385,8 +402,8 @@ class SoftActorCritic():
 
                 with torch.no_grad():
                     # Adjust the maximum length of the states and actions
-                    states = states[:, -self.max_len:, :]
-                    actions = actions[:, -self.max_len:, :]
+                    states = states[:, -self.max_len:, :].to(self.gpu_device)
+                    actions = actions[:, -self.max_len:, :].to(self.gpu_device)
 
                     if self.debug:
                         before = perf_counter()
@@ -401,7 +418,7 @@ class SoftActorCritic():
                     a_sto = stochastic_actions[-1, -1, :]
 
                     # Sample and convert the action
-                    _, a = actor.model.reparametrization_trick(a_sto)
+                    _, a, a_norm = actor.model.reparametrization_trick(a_sto)
 
                     if self.debug:
                         print(f"Time taken to get the action: {perf_counter() - before:.4f} seconds")
@@ -413,8 +430,8 @@ class SoftActorCritic():
                     sending_data = {
                         "agent_id": agt,
                         "action": {
-                            "d_pitch": a[0].item() * 90,
-                            "d_roll": a[1].item() * 180
+                            "d_pitch": a[0].item(),
+                            "d_roll": a[1].item()
                         },
                         "delta_time": self.time_increment
                     }
@@ -440,10 +457,10 @@ class SoftActorCritic():
                     # --------------- Environment's job to provide info ---------------
 
                     # Add it to the states
-                    states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
+                    states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
 
                     # Add it to the actions
-                    actions = torch.cat([actions, a.unsqueeze(0).unsqueeze(0)], dim=1)
+                    actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
 
                     # Adjust the maximum length of the states and actions
                     states = states[:, -self.max_len:, :]
@@ -453,7 +470,7 @@ class SoftActorCritic():
                     aug_state_next = [states, actions]
 
                     # Store in the buffer
-                    self.replay_buffer.add((aug_state, a, r, aug_state_next))
+                    self.replay_buffer.add((aug_state, a_norm, r, aug_state_next))
 
                     # Replace the states and actions lists
                     list_states[idx] = states
@@ -504,8 +521,8 @@ class SoftActorCritic():
 
                     with torch.no_grad():
                         # Adjust the maximum length of the states and actions
-                        states = states[:, -self.max_len:, :]
-                        actions = actions[:, -self.max_len:, :]
+                        states = states[:, -self.max_len:, :].to(self.gpu_device)
+                        actions = actions[:, -self.max_len:, :].to(self.gpu_device)
 
                         # Create the augmented state
                         aug_state = [states.clone(), actions.clone()]
@@ -517,14 +534,14 @@ class SoftActorCritic():
                         a_sto = stochastic_actions[-1, -1, :]
 
                         # Sample and convert the action
-                        _, a = actor.model.reparametrization_trick(a_sto)
+                        _, a, a_norm = actor.model.reparametrization_trick(a_sto)
 
                         # --------------- Environment's job to provide info ---------------
                         sending_data = {
                             "agent_id": agt,
                             "action": {
-                                "d_pitch": a[0].item() * 90,
-                                "d_roll": a[1].item() * 180
+                                "d_pitch": a[0].item(),
+                                "d_roll": a[1].item()
                             },
                             "delta_time": self.time_increment
                         }
@@ -547,10 +564,10 @@ class SoftActorCritic():
                         # --------------- Environment's job to provide info ---------------
 
                         # Add it to the states
-                        states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0)], dim=1)
+                        states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
 
                         # Add it to the actions
-                        actions = torch.cat([actions, a.unsqueeze(0).unsqueeze(0)], dim=1)
+                        actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
 
                         # Adjust the maximum length of the states and actions
                         states = states[:, -self.max_len:, :]
@@ -560,7 +577,7 @@ class SoftActorCritic():
                         aug_state_next = [states, actions]
 
                         # Store in the buffer
-                        self.replay_buffer.add((aug_state, a, r, aug_state_next))
+                        self.replay_buffer.add((aug_state, a_norm, r, aug_state_next))
 
                         # Replace the states and actions lists
                         list_states[idx] = states
@@ -581,38 +598,42 @@ class SoftActorCritic():
             # Loop over all gradient steps
             for g in range(self.gradient_steps):
                 with torch.no_grad():
-                    aug_state, a, r, aug_state_next = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(1))
+                    aug_state, a_norm, r, aug_state_next = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(1))
 
                 # Batchify the tensors neccessary for the transformer
                 aug_state, aug_state_next = self.tensor_manager.batchify(aug_state, aug_state_next)
 
                 # Get the stochastic actions again
-                new_stochastic_actions = actor(aug_state[0], aug_state[1])
+                new_stochastic_actions = actor(aug_state[0].to(self.gpu_device), aug_state[1].to(self.gpu_device))
 
                 # Select the last stochastic action
                 a_new_sto = new_stochastic_actions[-1, -1, :]
 
                 # Sample and convert the action
-                a_new_pretanh, a_new = actor.model.reparametrization_trick(a_new_sto)
+                a_new_preconv, _, a_new_norm = actor.model.reparametrization_trick(a_new_sto)
 
                 # Find the minimum of the Q-networks
-                qmin = torch.min(q1(aug_state[0], aug_state[1], a_new), q2(aug_state[0], aug_state[1], a_new))
+                qmin = torch.min(q1(aug_state[0], aug_state[1], a_new_norm), q2(aug_state[0], aug_state[1], a_new_norm))
 
-                # Log probability
-                sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
-                corrective_term = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
+                # # Log probability
+                # sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
+                # corrective_term = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
 
-                for i, feature in enumerate(a_new_sto):
-                    mean = feature[0]
-                    log_std = feature[1]
-                    std = torch.exp(log_std)
-                    var = std**2
+                # for i, feature in enumerate(a_new_sto):
+                #     mean = feature[0]
+                #     log_std = feature[1]
+                #     std = torch.exp(log_std)
+                #     var = std**2
                     
-                    sum = sum + (a_new_pretanh[i] - mean)**2 / var # (x - mean)^2 / var
-                    sum = sum + 2 * log_std + torch.log(torch.tensor(2 * torch.pi, requires_grad=True)) # log(2 * pi * var) = 2 * log(std) + log(2 * pi)
-                    corrective_term = corrective_term - torch.log(1 - a_new[i]**2 + 1e-6) # -log(1 - tanh^2(a_new_pretanh)) (with epsilon to avoid division by zero)
+                #     sum = sum + (a_new_preconv[i] - mean)**2 / var # (x - mean)^2 / var
+                #     sum = sum + 2 * log_std + torch.log(torch.tensor(2 * torch.pi, requires_grad=True)) # log(2 * pi * var) = 2 * log(std) + log(2 * pi)
+                #     corrective_term = corrective_term - torch.log(1 - a_new_norm[i]**2 + 1e-6) # -log(1 - tanh^2(a_new_preconv)) (with epsilon to avoid division by zero)
 
-                log_prob = -0.5 * sum + corrective_term # transformation-corrected log probability
+                k = self.a_conversions / self.conversion_constant
+                corrective_terms = k * (1 - torch.tanh(a_new_preconv.to("cpu") / self.conversion_constant)**2)
+                normal_dist = torch.distributions.Normal(a_new_sto[:, 0].to("cpu"), torch.exp(a_new_sto[:, 1].to("cpu")))
+                log_prob = normal_dist.log_prob(a_new_preconv.to("cpu")).sum() - torch.log(corrective_terms).sum()
+                # log_prob = -0.5 * sum + corrective_term # transformation-corrected log probability
 
                 # ------------------------------------- CLARIFICATION -------------------------------------
                 # Each loss is 0.5 * (prediction - target)^2 = 0.5 * MSE(prediction, target)
@@ -632,8 +653,8 @@ class SoftActorCritic():
 
                 # Compute the losses
                 J_v: torch.Tensor = 0.5 * F.mse_loss(v(aug_state[0], aug_state[1]), target_v)
-                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1(aug_state[0], aug_state[1], a), target_q)
-                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2(aug_state[0], aug_state[1], a), target_q)
+                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1(aug_state[0], aug_state[1], a_norm), target_q)
+                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2(aug_state[0], aug_state[1], a_norm), target_q)
                 J_pi: torch.Tensor = self.temperature * log_prob - qmin
 
                 if self.debug:
@@ -673,7 +694,7 @@ class SoftActorCritic():
     
     def normalize_state(self, state: dict) -> list:
         """
-        Normalize the action dictionary to a list.
+        Normalize the state dictionary to a list.
         """
         # Conversion dictionary: each has two elements, the first is the gain and the second is the offset
         conversion_dict = {
