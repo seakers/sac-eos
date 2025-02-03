@@ -44,29 +44,27 @@ class Critic(nn.Module):
         self.lr = lr
 
         layers = []
-        
-        for i in range(len(n_hidden)):
-            if i == 0:
-                layers.append(nn.Linear(in_dim, n_hidden[i]))
-            else:
-                layers.append(nn.Linear(n_hidden[i-1], n_hidden[i]))
+        layers.append(nn.Linear(in_dim, n_hidden[0]))
+        layers.append(nn.ReLU())
+
+        for i in range(len(n_hidden) - 1):
+            layers.append(nn.Linear(n_hidden[i], n_hidden[i + 1]))
             layers.append(nn.ReLU())
-
+        
+        layers.append(nn.LayerNorm(n_hidden[-1]))
         layers.append(nn.Linear(n_hidden[-1], out_dim))
-
-        self.sequential = nn.Sequential(*layers)
+        self.mlp = nn.Sequential(*layers)
 
         self.init_weights()
 
     def init_weights(self):
-        initrange = 0.1
-        for module in self.sequential:
-            if type(module) == torch.nn.Linear:
-                    nn.init.zeros_(module.bias)
-                    nn.init.uniform_(module.weight, -initrange, initrange)
+        for layer in self.mlp:
+            if isinstance(layer, nn.Linear):
+                init.kaiming_uniform_(layer.weight)
+                init.zeros_(layer.bias)
 
     def forward(self, x):
-        return self.sequential(x)
+        return self.mlp(x)
 
 class QNetwork(Critic):
     """

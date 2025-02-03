@@ -107,16 +107,16 @@ class EOSTransformer(nn.Transformer):
         # Encoder
         for layer in self.encoder.layers:
             for module in layer.children():
-                if type(module) == torch.nn.Linear:
-                    nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-                    nn.init.zeros_(module.bias)
+                if isinstance(layer, nn.Linear):
+                    init.kaiming_uniform_(module.weight, nonlinearity="relu")
+                    init.zeros_(module.bias)
 
         # Decoder
         for layer in self.decoder.layers:
             for module in layer.children():
-                if type(module) == torch.nn.Linear:
-                    nn.init.kaiming_uniform_(module.weight, nonlinearity="relu")
-                    nn.init.zeros_(module.bias)
+                if isinstance(layer, nn.Linear):
+                    init.kaiming_uniform_(module.weight, nonlinearity="relu")
+                    init.zeros_(module.bias)
 
     def _generate_square_subsequent_mask(self, sz):
         mask = torch.triu(torch.ones(sz, sz), diagonal=1)
@@ -325,6 +325,7 @@ class MLPModelEOS(nn.Module):
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(p=dropout))
         
+        layers.append(nn.LayerNorm(n_hidden[-1]))
         layers.append(nn.Linear(n_hidden[-1], 2*action_dim))
         self.mlp = nn.Sequential(*layers)
 

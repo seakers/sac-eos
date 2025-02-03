@@ -29,15 +29,15 @@
                 "activation": "relu",
                 "batch_first": true,
                 "kaiming_init": false,
-                "critics_hidden_layers": [1024, 512, 1024]
+                "critics_hidden_layers": [1024, 512]
             },
             {
                 "name": "MLP",
                 "aug_state_contains_actions": false,
                 "max_len": 100,
-                "hidden_layers": [1024, 512, 1024],
+                "hidden_layers": [1024, 512],
                 "dropout": 0.1,
-                "critics_hidden_layers": [1024, 512, 1024]
+                "critics_hidden_layers": [1024, 512]
             }
         ]
     },
