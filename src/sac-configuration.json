@@ -5,14 +5,14 @@
         "load_buffer": false
     },
     "Environment": {
-        "state_dim": 17,
+        "state_dim": 8,
         "action_dim": 2,
         "a_conversions": [90, 180],
         "time_increment": 60,
         "agents": [0]
     },
     "Architecture": {
-        "architecture_used": "Transformer",
+        "architecture_used": "MLP",
         "architectures_available": [
             {
                 "name": "Transformer",
@@ -34,23 +34,24 @@
             {
                 "name": "MLP",
                 "aug_state_contains_actions": false,
-                "max_len": 100,
-                "hidden_layers": [1024, 512],
+                "max_len": 10,
+                "hidden_layers": [128, 128],
                 "dropout": 0.1,
-                "critics_hidden_layers": [1024, 512]
+                "critics_hidden_layers": [128, 128]
             }
         ]
     },
     "Soft Actor-Critic": {
-        "replay_buffer_size": 100,
+        "replay_buffer_size": 1000000,
+        "minimum_samples": 10000,
         "environment_steps": 5,
         "gradient_steps": 5,
         "reward_scale": 0.1,
         "lambda_v": 1e-4,
         "lambda_q": 1e-4,
-        "lambda_pi": 1e-4,
-        "tau": 1e-3,
-        "discount": 0.99,
+        "lambda_pi": 1e-5,
+        "tau": 5e-3,
+        "discount": 0.5,
         "temperature": 1.0
     }
 }

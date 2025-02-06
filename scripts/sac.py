@@ -156,7 +156,7 @@ class SoftActorCritic():
         self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
         self.tensor_manager = TensorManager()
         self.a_conversions = torch.tensor(self.a_conversions) # action conversions from transformer post-tanh to real action
-        self.conversion_constant = torch.sqrt(torch.tensor(1 + torch.e**2))
+        self.scaling_factor = torch.sqrt(torch.tensor(1 + torch.e**2))
 
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
@@ -316,6 +316,9 @@ class SoftActorCritic():
         v = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
         vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
 
+        # Set the vtg network to the same weights as the v network
+        vtg.load_state_dict(v.state_dict())
+
         return q1, q2, v, vtg
     
     def load_previous_models(self, actor: Actor, q1: nn.Module, q2: nn.Module, v: nn.Module, vtg: nn.Module):
@@ -388,7 +391,8 @@ class SoftActorCritic():
         print("Starting warm up...")
 
         # Number of warm up steps required to fill the replay buffer
-        warm_up_steps = self.replay_buffer_size - len(self.replay_buffer)
+        warm_up_steps = self.minimum_samples - len(self.replay_buffer)
+        warm_up_steps = warm_up_steps if warm_up_steps > 0 else 0
         warm_up_steps = warm_up_steps // len(self.agents) + warm_up_steps % len(self.agents)
 
         # Loop over all iterations
@@ -610,28 +614,22 @@ class SoftActorCritic():
                 # Sample and convert the action
                 a_new_preconv, _, a_new_norm = actor.model.reparametrization_trick(a_new_sto)
 
-                # Find the minimum of the Q-networks
-                qmin = torch.min(q1(aug_state[0], aug_state[1], a_new_norm), q2(aug_state[0], aug_state[1], a_new_norm))
+                # Find the minimum of the Q-networks for the replay buffer sample and the new action
+                q1_replay = q1(aug_state[0], aug_state[1], a_norm)
+                q2_replay = q2(aug_state[0], aug_state[1], a_norm)
+                qmin_new = torch.min(q1(aug_state[0], aug_state[1], a_new_norm), q2(aug_state[0], aug_state[1], a_new_norm))
 
                 # # Log probability
                 # sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
                 # corrective_term = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
 
-                # for i, feature in enumerate(a_new_sto):
-                #     mean = feature[0]
-                #     log_std = feature[1]
-                #     std = torch.exp(log_std)
-                #     var = std**2
-                    
-                #     sum = sum + (a_new_preconv[i] - mean)**2 / var # (x - mean)^2 / var
-                #     sum = sum + 2 * log_std + torch.log(torch.tensor(2 * torch.pi, requires_grad=True)) # log(2 * pi * var) = 2 * log(std) + log(2 * pi)
-                #     corrective_term = corrective_term - torch.log(1 - a_new_norm[i]**2 + 1e-6) # -log(1 - tanh^2(a_new_preconv)) (with epsilon to avoid division by zero)
+                k = 1 / self.scaling_factor
+                corrective_terms = k / torch.cosh(a_new_preconv / self.scaling_factor)**2 # 1 - tanh^2 = sech^2 = 1 / cosh^2
+                normal_dist = torch.distributions.Normal(a_new_sto[:, 0], torch.exp(a_new_sto[:, 1]))
+                log_prob = normal_dist.log_prob(a_new_preconv).sum() - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum()
 
-                k = self.a_conversions / self.conversion_constant
-                corrective_terms = k * (1 - torch.tanh(a_new_preconv.to("cpu") / self.conversion_constant)**2)
-                normal_dist = torch.distributions.Normal(a_new_sto[:, 0].to("cpu"), torch.exp(a_new_sto[:, 1].to("cpu")))
-                log_prob = normal_dist.log_prob(a_new_preconv.to("cpu")).sum() - torch.log(corrective_terms).sum()
-                # log_prob = -0.5 * sum + corrective_term # transformation-corrected log probability
+                if self.debug:
+                    print("LogProbDen:", normal_dist.log_prob(a_new_preconv).sum(), "Corrective terms:", corrective_terms, "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum())
 
                 # ------------------------------------- CLARIFICATION -------------------------------------
                 # Each loss is 0.5 * (prediction - target)^2 = 0.5 * MSE(prediction, target)
@@ -640,7 +638,7 @@ class SoftActorCritic():
 
                 # Target value for each loss
                 with torch.no_grad():
-                    target_v = qmin - self.temperature * log_prob
+                    target_v = qmin_new - self.temperature * log_prob
                     target_q = r + self.discount * vtg(aug_state_next[0], aug_state_next[1])
 
                 # Set the gradients to zero
@@ -651,12 +649,16 @@ class SoftActorCritic():
 
                 # Compute the losses
                 J_v: torch.Tensor = 0.5 * F.mse_loss(v(aug_state[0], aug_state[1]), target_v)
-                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1(aug_state[0], aug_state[1], a_norm), target_q)
-                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2(aug_state[0], aug_state[1], a_norm), target_q)
-                J_pi: torch.Tensor = self.temperature * log_prob - qmin
+                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1_replay, target_q)
+                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2_replay, target_q)
+                J_pi: torch.Tensor = self.temperature * log_prob - qmin_new
 
                 if self.debug:
-                    print(f"Reward: {r.item():.4f}; Losses: {J_v.item():.4f}, {J_q1.item():.4f}, {J_q2.item():.4f}, {J_pi.item():.4f}; Log probability: {log_prob.item():.4f}; Qmin: {qmin.item():.4f}")
+                    print("V ----> Loss:", f"{J_v.item():.3f}", "Forward:", f"{v(aug_state[0], aug_state[1]).item():.3f}", "Target:", f"{target_v.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}")
+                    print("Q1 ---> Loss:", f"{J_q1.item():.3f}", "Forward:", f"{q1_replay.item():.3f}", "Target:", f"{target_q.item():.3f}")
+                    print("Q2 ---> Loss:", f"{J_q2.item():.3f}", "Forward:", f"{q2_replay.item():.3f}", "Target:", f"{target_q.item():.3f}")
+                    print("Pi ---> Loss:", f"{J_pi.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}", "Alpha:", f"{self.temperature:.3f}", "LogProbDen:", f"{log_prob.item():.3f}")
+                    print("Vtg --> Forward:", f"{vtg(aug_state_next[0], aug_state_next[1]).item():.3f}", "Reward:", f"{r.item():.3f}")
 
                 # Store the losses
                 self.losses["v"].append(J_v.item())

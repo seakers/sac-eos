@@ -178,7 +178,7 @@ class TransformerModelEOS(nn.Module):
         self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.a_conversions = a_conversions.to(self.gpu_device)
         self.epsilon = torch.distributions.Normal(0, 1)
-        self.conversion_constant = torch.sqrt(torch.tensor(1 + torch.e**2, device=self.gpu_device))
+        self.scaling_factor = torch.sqrt(torch.tensor(1 + torch.e**2, device=self.gpu_device))
 
         # Check it is a transformer
         if self.transformer.architecture_type != "Transformer":
@@ -275,9 +275,9 @@ class TransformerModelEOS(nn.Module):
     
     def convert(self, sampled_actions: torch.tensor, normalized: bool=False):
         if normalized:
-            return torch.tanh(sampled_actions / self.conversion_constant)
+            return torch.tanh(sampled_actions / self.scaling_factor)
         else:
-            return torch.tanh(sampled_actions / self.conversion_constant) * self.a_conversions
+            return torch.tanh(sampled_actions / self.scaling_factor) * self.a_conversions
     
     def reparametrization_trick(self, stochastic_actions):
         # Number of dimensions of the tensor
@@ -314,7 +314,8 @@ class MLPModelEOS(nn.Module):
         self.n_hidden = n_hidden
         self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.a_conversions = a_conversions.to(self.gpu_device)
-        self.conversion_constant = torch.sqrt(torch.tensor(1 + torch.e**2, device=self.gpu_device))
+        self.epsilon = torch.distributions.Normal(0, 1)
+        self.scaling_factor = torch.sqrt(torch.tensor(1 + torch.e**2, device=self.gpu_device))
 
         layers = []
         layers.append(nn.Linear(state_dim, n_hidden[0]))
@@ -334,7 +335,7 @@ class MLPModelEOS(nn.Module):
     def init_weights(self):
         for layer in self.mlp:
             if isinstance(layer, nn.Linear):
-                init.xavier_uniform_(layer.weight)
+                init.kaiming_uniform_(layer.weight)
                 init.zeros_(layer.bias)
 
     def forward(self, x: torch.Tensor, *args):
@@ -405,9 +406,9 @@ class MLPModelEOS(nn.Module):
     
     def convert(self, sampled_actions: torch.tensor, normalized: bool=False):
         if normalized:
-            return torch.tanh(sampled_actions / self.conversion_constant)
+            return torch.tanh(sampled_actions / self.scaling_factor)
         else:
-            return torch.tanh(sampled_actions / self.conversion_constant) * self.a_conversions
+            return torch.tanh(sampled_actions / self.scaling_factor) * self.a_conversions
     
     def reparametrization_trick(self, stochastic_actions):
         # Number of dimensions of the tensor
