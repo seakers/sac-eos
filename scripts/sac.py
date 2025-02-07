@@ -156,7 +156,6 @@ class SoftActorCritic():
         self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
         self.tensor_manager = TensorManager()
         self.a_conversions = torch.tensor(self.a_conversions) # action conversions from transformer post-tanh to real action
-        self.scaling_factor = torch.sqrt(torch.tensor(1 + torch.e**2))
 
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
@@ -212,6 +211,9 @@ class SoftActorCritic():
             actor, q1, q2, v, vtg = self.create_transformer_entities()
         elif self.architecture_used == "MLP":
             actor, q1, q2, v, vtg = self.create_mlp_entities()
+
+        # Set scaling factor
+        self.scaling_factor = actor.model.scaling_factor
 
         return actor, q1, q2, v, vtg
 

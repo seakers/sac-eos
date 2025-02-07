@@ -51,7 +51,7 @@
         "lambda_q": 1e-4,
         "lambda_pi": 1e-5,
         "tau": 5e-3,
-        "discount": 0.5,
+        "discount": 0.4,
         "temperature": 1.0
     }
 }
