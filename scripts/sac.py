@@ -412,9 +412,6 @@ class SoftActorCritic():
                     if self.debug:
                         before = perf_counter()
 
-                    # Create the augmented state
-                    aug_state = [states.clone(), actions.clone()]
-
                     # Get the stochastic actions
                     stochastic_actions = actor(states, actions)
 
@@ -461,24 +458,21 @@ class SoftActorCritic():
                     # --------------- Environment's job to provide info ---------------
 
                     # Add it to the states
-                    states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
+                    next_states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
 
                     # Add it to the actions
-                    actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
+                    next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
 
                     # Adjust the maximum length of the states and actions
-                    states = states[:, -self.max_len:, :]
-                    actions = actions[:, -self.max_len:, :]
-
-                    # Augmented state for the next step
-                    aug_state_next = [states, actions]
+                    next_states = states[:, -self.max_len:, :]
+                    next_actions = actions[:, -self.max_len:, :]
 
                     # Store in the buffer
-                    self.replay_buffer.add((aug_state, a_norm, r, aug_state_next))
+                    self.replay_buffer.add((states, actions, a_norm, r, next_states, next_actions))
 
                     # Replace the states and actions lists
-                    list_states[idx] = states
-                    list_actions[idx] = actions
+                    list_states[idx] = next_states
+                    list_actions[idx] = next_actions
 
             # Break if time is up
             if done:
@@ -528,9 +522,6 @@ class SoftActorCritic():
                         states = states[:, -self.max_len:, :].to(self.gpu_device)
                         actions = actions[:, -self.max_len:, :].to(self.gpu_device)
 
-                        # Create the augmented state
-                        aug_state = [states.clone(), actions.clone()]
-
                         # Get the stochastic actions
                         stochastic_actions = actor(states, actions)
 
@@ -568,24 +559,21 @@ class SoftActorCritic():
                         # --------------- Environment's job to provide info ---------------
 
                         # Add it to the states
-                        states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
+                        next_states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
 
                         # Add it to the actions
-                        actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
+                        next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
 
                         # Adjust the maximum length of the states and actions
-                        states = states[:, -self.max_len:, :]
-                        actions = actions[:, -self.max_len:, :]
-
-                        # Augmented state for the next step
-                        aug_state_next = [states, actions]
+                        next_states = states[:, -self.max_len:, :]
+                        next_actions = actions[:, -self.max_len:, :]
 
                         # Store in the buffer
-                        self.replay_buffer.add((aug_state, a_norm, r, aug_state_next))
+                        self.replay_buffer.add((states, actions, a_norm, r, next_states, next_actions))
 
                         # Replace the states and actions lists
-                        list_states[idx] = states
-                        list_actions[idx] = actions
+                        list_states[idx] = next_states
+                        list_actions[idx] = next_actions
 
                 # Break if time is up
                 if done:
@@ -602,13 +590,13 @@ class SoftActorCritic():
             # Loop over all gradient steps
             for g in range(self.gradient_steps):
                 with torch.no_grad():
-                    aug_state, a_norm, r, aug_state_next = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(1))
+                    states, actions, a_norm, r, next_states, next_actions = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(1))
 
                 # Batchify the tensors neccessary for the transformer
-                aug_state, aug_state_next = self.tensor_manager.batchify(aug_state, aug_state_next)
+                states, actions, next_states, next_actions = self.tensor_manager.batchify(states, actions, next_states, next_actions)
 
                 # Get the stochastic actions again
-                new_stochastic_actions = actor(aug_state[0].to(self.gpu_device), aug_state[1].to(self.gpu_device))
+                new_stochastic_actions = actor(states.to(self.gpu_device), actions.to(self.gpu_device))
 
                 # Select the last stochastic action
                 a_new_sto = new_stochastic_actions[-1, -1, :]
@@ -617,9 +605,9 @@ class SoftActorCritic():
                 a_new_preconv, _, a_new_norm = actor.model.reparametrization_trick(a_new_sto)
 
                 # Find the minimum of the Q-networks for the replay buffer sample and the new action
-                q1_replay = q1(aug_state[0], aug_state[1], a_norm)
-                q2_replay = q2(aug_state[0], aug_state[1], a_norm)
-                qmin_new = torch.min(q1(aug_state[0], aug_state[1], a_new_norm), q2(aug_state[0], aug_state[1], a_new_norm))
+                q1_replay = q1(states, actions, a_norm)
+                q2_replay = q2(states, actions, a_norm)
+                qmin_new = torch.min(q1(states, actions, a_new_norm), q2(states, actions, a_new_norm))
 
                 k = 1 / self.scaling_factor
                 corrective_terms = k / torch.cosh(a_new_preconv / self.scaling_factor)**2 # 1 - tanh^2 = sech^2 = 1 / cosh^2
@@ -637,7 +625,7 @@ class SoftActorCritic():
                 # Target value for each loss
                 with torch.no_grad():
                     target_v = qmin_new - self.temperature * log_prob
-                    target_q = r + self.discount * vtg(aug_state_next[0], aug_state_next[1])
+                    target_q = r + self.discount * vtg(next_states, next_actions)
 
                 # Set the gradients to zero
                 optimizer_v.zero_grad()
@@ -646,17 +634,17 @@ class SoftActorCritic():
                 optimizer_pi.zero_grad()
 
                 # Compute the losses
-                J_v: torch.Tensor = 0.5 * F.mse_loss(v(aug_state[0], aug_state[1]), target_v)
+                J_v: torch.Tensor = 0.5 * F.mse_loss(v(states, actions), target_v)
                 J_q1: torch.Tensor = 0.5 * F.mse_loss(q1_replay, target_q)
                 J_q2: torch.Tensor = 0.5 * F.mse_loss(q2_replay, target_q)
                 J_pi: torch.Tensor = self.temperature * log_prob - qmin_new
 
                 if self.debug:
-                    print("V ----> Loss:", f"{J_v.item():.3f}", "Forward:", f"{v(aug_state[0], aug_state[1]).item():.3f}", "Target:", f"{target_v.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}")
+                    print("V ----> Loss:", f"{J_v.item():.3f}", "Forward:", f"{v(states, actions).item():.3f}", "Target:", f"{target_v.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}")
                     print("Q1 ---> Loss:", f"{J_q1.item():.3f}", "Forward:", f"{q1_replay.item():.3f}", "Target:", f"{target_q.item():.3f}")
                     print("Q2 ---> Loss:", f"{J_q2.item():.3f}", "Forward:", f"{q2_replay.item():.3f}", "Target:", f"{target_q.item():.3f}")
                     print("Pi ---> Loss:", f"{J_pi.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}", "Alpha:", f"{self.temperature:.3f}", "LogProbDen:", f"{log_prob.item():.3f}")
-                    print("Vtg --> Forward:", f"{vtg(aug_state_next[0], aug_state_next[1]).item():.3f}", "Reward:", f"{r.item():.3f}")
+                    print("Vtg --> Forward:", f"{vtg(next_states, next_actions).item():.3f}", "Reward:", f"{r.item():.3f}")
 
                 # Store the losses
                 self.losses["v"].append(J_v.item())
