@@ -8,7 +8,7 @@ class TensorManager():
     def __init__(self):
         self.object_type = "Tensor Manager"
 
-    def full_squeeze(self, *tensors):
+    def full_squeeze(self, *tensors) -> list[torch.Tensor]:
         """
         Squeeze tensor until it does not have any dimension of size 1 or squeeze the tensors in tuples until they have 3 dimensions (transformer requirements).
         """

@@ -611,8 +611,10 @@ class SoftActorCritic():
                 a_new_preconv, _, a_new_norm = actor.model.reparametrization_trick(a_new_sto)
 
                 # Find the minimum of the Q-networks for the replay buffer sample and the new action
-                q1_replay = q1(states, actions, a_norm)
-                q2_replay = q2(states, actions, a_norm)
+                v_replay: torch.Tensor = v(states, actions)
+                vtg_replay_next: torch.Tensor = vtg(next_states, next_actions)
+                q1_replay: torch.Tensor = q1(states, actions, a_norm)
+                q2_replay: torch.Tensor = q2(states, actions, a_norm)
                 qmin_new: torch.Tensor = torch.min(q1(states, actions, a_new_norm), q2(states, actions, a_new_norm))
 
                 k = 1 / self.scaling_factor
@@ -628,11 +630,11 @@ class SoftActorCritic():
 
                 # Target value for each loss
                 with torch.no_grad():
-                    target_v = qmin_new - self.temperature * log_prob
-                    target_q = r + self.discount * vtg(next_states, next_actions)
+                    target_v: torch.Tensor = qmin_new - self.temperature * log_prob
+                    target_q: torch.Tensor = r + self.discount * vtg_replay_next
 
                 if self.debug:
-                    print("LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(), "Corrective terms:", corrective_terms, "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum())
+                    print("LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
                     print("Shape of LogProbDen:", log_prob.shape, "Shape of the targets:", target_v.shape, target_q.shape)
 
                 # Set the gradients to zero
@@ -642,17 +644,17 @@ class SoftActorCritic():
                 optimizer_pi.zero_grad()
 
                 # Compute the losses
-                J_v: torch.Tensor = 0.5 * self.mse_loss(v(states, actions), target_v)
+                J_v: torch.Tensor = 0.5 * self.mse_loss(v_replay, target_v)
                 J_q1: torch.Tensor = 0.5 * self.mse_loss(q1_replay, target_q)
                 J_q2: torch.Tensor = 0.5 * self.mse_loss(q2_replay, target_q)
                 J_pi: torch.Tensor = self.temperature * log_prob.mean() - qmin_new.mean()
 
                 if self.debug:
-                    print("V ----> Loss:", f"{J_v.item():.3f}", "Forward:", f"{v(states, actions).item():.3f}", "Target:", f"{target_v.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}")
-                    print("Q1 ---> Loss:", f"{J_q1.item():.3f}", "Forward:", f"{q1_replay.item():.3f}", "Target:", f"{target_q.item():.3f}")
-                    print("Q2 ---> Loss:", f"{J_q2.item():.3f}", "Forward:", f"{q2_replay.item():.3f}", "Target:", f"{target_q.item():.3f}")
-                    print("Pi ---> Loss:", f"{J_pi.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}", "Alpha:", f"{self.temperature:.3f}", "LogProbDen:", f"{log_prob.item():.3f}")
-                    print("Vtg --> Forward:", f"{vtg(next_states, next_actions).item():.3f}", "Reward:", f"{r.item():.3f}")
+                    print("V ----> Loss:", f"{J_v.item():.3f}", "Forward:", f"{v_replay.mean().item():.3f}", "Target:", f"{target_v.mean().item():.3f}", "Qmin:", f"{qmin_new.mean().item():.3f}")
+                    print("Q1 ---> Loss:", f"{J_q1.item():.3f}", "Forward:", f"{q1_replay.mean().item():.3f}", "Target:", f"{target_q.mean().item():.3f}")
+                    print("Q2 ---> Loss:", f"{J_q2.item():.3f}", "Forward:", f"{q2_replay.mean().item():.3f}", "Target:", f"{target_q.mean().item():.3f}")
+                    print("Pi ---> Loss:", f"{J_pi.item():.3f}", "Qmin:", f"{qmin_new.mean().item():.3f}", "Alpha:", f"{self.temperature:.3f}", "LogProbDen:", f"{log_prob.mean().item():.3f}")
+                    print("Vtg --> Forward:", f"{vtg_replay_next.mean().item():.3f}", "Reward:", f"{r.mean().item():.3f}")
 
                 # Store the losses
                 self.losses["v"].append(J_v.item())
