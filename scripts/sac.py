@@ -155,7 +155,7 @@ class SoftActorCritic():
         self.set_properties(conf)
         self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
         self.tensor_manager = TensorManager()
-        self.a_conversions = torch.tensor(self.a_conversions) # action conversions from transformer post-tanh to real action
+        self.a_conversions = torch.tensor(self.a_conversions) # action conversions from transformer post-tanh to real action space
 
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
@@ -464,8 +464,8 @@ class SoftActorCritic():
                     next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
 
                     # Adjust the maximum length of the states and actions
-                    next_states = states[:, -self.max_len:, :]
-                    next_actions = actions[:, -self.max_len:, :]
+                    next_states = next_states[:, -self.max_len:, :]
+                    next_actions = next_actions[:, -self.max_len:, :]
 
                     # Store in the buffer
                     self.replay_buffer.add((states, actions, a_norm, r, next_states, next_actions))
@@ -565,8 +565,8 @@ class SoftActorCritic():
                         next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
 
                         # Adjust the maximum length of the states and actions
-                        next_states = states[:, -self.max_len:, :]
-                        next_actions = actions[:, -self.max_len:, :]
+                        next_states = next_states[:, -self.max_len:, :]
+                        next_actions = next_actions[:, -self.max_len:, :]
 
                         # Store in the buffer
                         self.replay_buffer.add((states, actions, a_norm, r, next_states, next_actions))
@@ -590,7 +590,7 @@ class SoftActorCritic():
             # Loop over all gradient steps
             for g in range(self.gradient_steps):
                 with torch.no_grad():
-                    states, actions, a_norm, r, next_states, next_actions = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(1))
+                    states, actions, a_norm, r, next_states, next_actions = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(self.batch_size))
 
                 # Batchify the tensors neccessary for the transformer
                 states, actions, next_states, next_actions = self.tensor_manager.batchify(states, actions, next_states, next_actions)
