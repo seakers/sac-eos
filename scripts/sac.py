@@ -621,10 +621,6 @@ class SoftActorCritic():
                 q2_replay = q2(aug_state[0], aug_state[1], a_norm)
                 qmin_new = torch.min(q1(aug_state[0], aug_state[1], a_new_norm), q2(aug_state[0], aug_state[1], a_new_norm))
 
-                # # Log probability
-                # sum = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
-                # corrective_term = torch.tensor(0.0, dtype=torch.float32, requires_grad=True)
-
                 k = 1 / self.scaling_factor
                 corrective_terms = k / torch.cosh(a_new_preconv / self.scaling_factor)**2 # 1 - tanh^2 = sech^2 = 1 / cosh^2
                 normal_dist = torch.distributions.Normal(a_new_sto[:, 0], torch.exp(a_new_sto[:, 1]))
