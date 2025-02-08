@@ -467,8 +467,9 @@ class SoftActorCritic():
                     next_states = next_states[:, -self.max_len:, :]
                     next_actions = next_actions[:, -self.max_len:, :]
 
-                    # Store in the buffer
-                    self.replay_buffer.add((states, actions, a_norm, r, next_states, next_actions))
+                    # Store in the buffer only if the states and actions have the maximum length (or batch processing will collapse)
+                    if states.shape[-2] == self.max_len:
+                        self.replay_buffer.add((states.squeeze(0), actions.squeeze(0), a_norm, r, next_states.squeeze(0), next_actions.squeeze(0))) # batch sampling will unsqueeze the first dimension
 
                     # Replace the states and actions lists
                     list_states[idx] = next_states
@@ -568,8 +569,9 @@ class SoftActorCritic():
                         next_states = next_states[:, -self.max_len:, :]
                         next_actions = next_actions[:, -self.max_len:, :]
 
-                        # Store in the buffer
-                        self.replay_buffer.add((states, actions, a_norm, r, next_states, next_actions))
+                        # Store in the buffer only if the states and actions have the maximum length (or batch processing will collapse)
+                        if states.shape[-2] == self.max_len:
+                            self.replay_buffer.add((states.squeeze(0), actions.squeeze(0), a_norm, r, next_states.squeeze(0), next_actions.squeeze(0))) # batch sampling will unsqueeze the first dimension
 
                         # Replace the states and actions lists
                         list_states[idx] = next_states
@@ -591,6 +593,9 @@ class SoftActorCritic():
             for g in range(self.gradient_steps):
                 with torch.no_grad():
                     states, actions, a_norm, r, next_states, next_actions = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(self.batch_size))
+
+                if self.debug:
+                    print("Shapes of buffer sampling:", states.shape, actions.shape, a_norm.shape, r.shape, next_states.shape, next_actions.shape)
 
                 # Batchify the tensors neccessary for the transformer
                 states, actions, next_states, next_actions = self.tensor_manager.batchify(states, actions, next_states, next_actions)
