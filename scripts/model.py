@@ -65,7 +65,7 @@ class PositionalEncoder(nn.Module):
 
         pe = pe.unsqueeze(0).transpose(0, 1)
 
-        self.register_buffer("pe", pe) # register_buffer() is used to make the tensor
+        self.pe = pe
 
     def forward(self, x):
         x = (x + self.pe[:x.size(0), :])
@@ -340,7 +340,7 @@ class MLPModelEOS(nn.Module):
 
     def forward(self, x: torch.Tensor, *args):
         # Rearange the input tensor so that all past states are concatenated
-        x = x.view(x.shape[0], -1).unsqueeze(0) # (batch_size, seq_len, state_dim) -> (1, batch_size, seq_len * state_dim)
+        x = x.view(x.shape[0], -1).unsqueeze(1) # (batch_size, seq_len, state_dim) -> (batch_size, 1, seq_len * state_dim)
 
         # Check it has 2 dimensions
         if x.dim() != 3:
@@ -355,7 +355,7 @@ class MLPModelEOS(nn.Module):
         stochastic_actions = self.mlp(x)
 
         # Group the actions by features with their mean and variance
-        stochastic_actions = stochastic_actions.view(stochastic_actions.shape[1], stochastic_actions.shape[1], self.action_dim, 2)
+        stochastic_actions = stochastic_actions.view(stochastic_actions.shape[0], stochastic_actions.shape[1], self.action_dim, 2)
 
         return stochastic_actions
 

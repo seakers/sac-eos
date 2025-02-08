@@ -96,11 +96,11 @@ class QNetwork(Critic):
             actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1], device=self.gpu_device)], dim=-2)
 
         if self.aug_state_contains_actions:
-            aug_state_1D = torch.cat([states, actions], dim=2).view(-1)
+            aug_state_1D = torch.cat([states, actions], dim=-1).view(states.shape[0], -1)
         else:
-            aug_state_1D = states.view(-1)
+            aug_state_1D = states.view(states.shape[0], -1)
 
-        x = torch.cat([aug_state_1D, new_action])
+        x = torch.cat([aug_state_1D, new_action], dim=-1)
         x = super(QNetwork, self).forward(x)
         return x
     
@@ -134,9 +134,9 @@ class VNetwork(Critic):
             actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1], device=self.gpu_device)], dim=-2)
 
         if self.aug_state_contains_actions:
-            aug_state_1D = torch.cat([states, actions], dim=2).view(-1)
+            aug_state_1D = torch.cat([states, actions], dim=-1).view(states.shape[0], -1)
         else:
-            aug_state_1D = states.view(-1)
+            aug_state_1D = states.view(states.shape[0], -1)
 
         x = aug_state_1D
         x = super(VNetwork, self).forward(x)
@@ -153,6 +153,7 @@ class SoftActorCritic():
         self.save_path = save_path
         self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.set_properties(conf)
+        self.mse_loss = nn.MSELoss(reduction="mean")
         self.losses = {"v": [], "q1": [], "q2": [], "pi": []}
         self.tensor_manager = TensorManager()
         self.a_conversions = torch.tensor(self.a_conversions) # action conversions from transformer post-tanh to real action space
@@ -416,7 +417,7 @@ class SoftActorCritic():
                     stochastic_actions = actor(states, actions)
 
                     # Select the last stochastic action
-                    a_sto = stochastic_actions[-1, -1, :]
+                    a_sto = stochastic_actions[-1, -1, :, :] # get a 2-dim tensor with the last stochastic action
 
                     # Sample and convert the action
                     _, a, a_norm = actor.model.reparametrization_trick(a_sto)
@@ -527,7 +528,7 @@ class SoftActorCritic():
                         stochastic_actions = actor(states, actions)
 
                         # Select the last stochastic action
-                        a_sto = stochastic_actions[-1, -1, :]
+                        a_sto = stochastic_actions[-1, -1, :, :] # get a 2-dim tensor with the last stochastic action
 
                         # Sample and convert the action
                         _, a, a_norm = actor.model.reparametrization_trick(a_sto)
@@ -598,13 +599,13 @@ class SoftActorCritic():
                     print("Shapes of buffer sampling:", states.shape, actions.shape, a_norm.shape, r.shape, next_states.shape, next_actions.shape)
 
                 # Batchify the tensors neccessary for the transformer
-                states, actions, next_states, next_actions = self.tensor_manager.batchify(states, actions, next_states, next_actions)
+                states, actions, next_states, next_actions = self.tensor_manager.batchify(states, actions, next_states, next_actions) # batchify if necessary
 
                 # Get the stochastic actions again
                 new_stochastic_actions = actor(states.to(self.gpu_device), actions.to(self.gpu_device))
 
                 # Select the last stochastic action
-                a_new_sto = new_stochastic_actions[-1, -1, :]
+                a_new_sto = new_stochastic_actions[:, -1, :, :]
 
                 # Sample and convert the action
                 a_new_preconv, _, a_new_norm = actor.model.reparametrization_trick(a_new_sto)
@@ -612,15 +613,13 @@ class SoftActorCritic():
                 # Find the minimum of the Q-networks for the replay buffer sample and the new action
                 q1_replay = q1(states, actions, a_norm)
                 q2_replay = q2(states, actions, a_norm)
-                qmin_new = torch.min(q1(states, actions, a_new_norm), q2(states, actions, a_new_norm))
+                qmin_new: torch.Tensor = torch.min(q1(states, actions, a_new_norm), q2(states, actions, a_new_norm))
 
                 k = 1 / self.scaling_factor
                 corrective_terms = k / torch.cosh(a_new_preconv / self.scaling_factor)**2 # 1 - tanh^2 = sech^2 = 1 / cosh^2
-                normal_dist = torch.distributions.Normal(a_new_sto[:, 0], torch.exp(a_new_sto[:, 1]))
-                log_prob = normal_dist.log_prob(a_new_preconv).sum() - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum()
-
-                if self.debug:
-                    print("LogProbDen:", normal_dist.log_prob(a_new_preconv).sum(), "Corrective terms:", corrective_terms, "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum())
+                normal_dist = torch.distributions.Normal(a_new_sto[:, :, 0], torch.exp(a_new_sto[:, :, 1]))
+                log_prob: torch.Tensor = normal_dist.log_prob(a_new_preconv).sum(dim=-1) - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1)
+                log_prob = log_prob.unsqueeze(-1) # add the last dimension, given that the sum contracted it
 
                 # ------------------------------------- CLARIFICATION -------------------------------------
                 # Each loss is 0.5 * (prediction - target)^2 = 0.5 * MSE(prediction, target)
@@ -632,6 +631,10 @@ class SoftActorCritic():
                     target_v = qmin_new - self.temperature * log_prob
                     target_q = r + self.discount * vtg(next_states, next_actions)
 
+                if self.debug:
+                    print("LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(), "Corrective terms:", corrective_terms, "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum())
+                    print("Shape of LogProbDen:", log_prob.shape, "Shape of the targets:", target_v.shape, target_q.shape)
+
                 # Set the gradients to zero
                 optimizer_v.zero_grad()
                 optimizer_q1.zero_grad()
@@ -639,10 +642,10 @@ class SoftActorCritic():
                 optimizer_pi.zero_grad()
 
                 # Compute the losses
-                J_v: torch.Tensor = 0.5 * F.mse_loss(v(states, actions), target_v)
-                J_q1: torch.Tensor = 0.5 * F.mse_loss(q1_replay, target_q)
-                J_q2: torch.Tensor = 0.5 * F.mse_loss(q2_replay, target_q)
-                J_pi: torch.Tensor = self.temperature * log_prob - qmin_new
+                J_v: torch.Tensor = 0.5 * self.mse_loss(v(states, actions), target_v)
+                J_q1: torch.Tensor = 0.5 * self.mse_loss(q1_replay, target_q)
+                J_q2: torch.Tensor = 0.5 * self.mse_loss(q2_replay, target_q)
+                J_pi: torch.Tensor = self.temperature * log_prob.mean() - qmin_new.mean()
 
                 if self.debug:
                     print("V ----> Loss:", f"{J_v.item():.3f}", "Forward:", f"{v(states, actions).item():.3f}", "Target:", f"{target_v.item():.3f}", "Qmin:", f"{qmin_new.item():.3f}")
