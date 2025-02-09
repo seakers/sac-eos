@@ -72,6 +72,24 @@ class PositionalEncoder(nn.Module):
         x = self.dropout(x)
         return x
     
+class SegmentPositionalEncoder(nn.Module):
+    """
+    Class to encode the position of the states and actions using the a concatenated tensor which represents the sequence position. Child class of nn.Module.
+    """
+    def __init__(self, max_len: int, d_model: int, encoding_segment_size: int, dropout: float):
+        super(SegmentPositionalEncoder, self).__init__()
+        self.max_len = max_len
+        self.d_model = d_model
+        self.encoding_segment_size = encoding_segment_size
+        self.embed = nn.Embedding(max_len, encoding_segment_size)
+        self.dropout = nn.Dropout(p=dropout)
+
+    def forward(self, x):
+        positions = torch.arange(x.size(1), device=x.device).expand(x.size(0), -1)
+        x = torch.cat([x, self.embed(positions)], dim=-1)
+        x = self.dropout(x)
+        return x
+
 class EOSTransformer(nn.Transformer):
     """
     Class to create a transformer for the Earth Observation Satellite model. Child class of nn.Transformer.
@@ -218,7 +236,7 @@ class TransformerModelEOS(nn.Module):
         mask = self.transformer._generate_square_subsequent_mask(seq_len)
 
         # Pass the input states and actions through the transformer
-        output = self.transformer(input_states, input_actions, src_mask=mask, tgt_mask=mask, src_is_causal=True, tgt_is_causal=True)
+        output = self.transformer(input_states, input_actions, src_mask=mask, tgt_mask=mask, memory_mask=mask, src_is_causal=True, tgt_is_causal=True, memory_is_causal=True)
 
         # Pass the output through the projector
         stochastic_actions = self.projector(output)
