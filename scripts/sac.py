@@ -222,24 +222,36 @@ class SoftActorCritic():
         """
         Create the entities for the SAC algorithm with the Transformer architecture.
         """
+        # The segment size is between 2 and 5
+        encoding_segment_size = int(torch.clamp(torch.tensor(self.d_model // 100), min=2, max=5).item()) # segment size is between 2 and 5
+        embed_dim = self.d_model - encoding_segment_size
+
         # Create the embedder object for states
         states_embedder = FloatEmbedder(
             input_dim=self.state_dim,
-            embed_dim=self.d_model,
+            embed_dim=embed_dim,
             dropout=self.embed_dropout
         )
         
         # Create the embedder object for actions
         actions_embedder = FloatEmbedder(
             input_dim=self.action_dim,
-            embed_dim=self.d_model,
+            embed_dim=embed_dim,
             dropout=self.embed_dropout
         )
-        
-        # Create the positional encoder object
-        pos_encoder = PositionalEncoder(
-            d_model=self.d_model,
+
+        # # Create the positional encoder object
+        # pos_encoder = PositionalEncoder(
+        #     max_len=self.max_len,
+        #     d_model=self.d_model,
+        #     dropout=self.pos_dropout
+        # )
+
+        # Create the segment positional encoder object
+        pos_encoder = SegmentPositionalEncoder(
             max_len=self.max_len,
+            d_model=self.d_model,
+            encoding_segment_size=encoding_segment_size,
             dropout=self.pos_dropout
         )
 

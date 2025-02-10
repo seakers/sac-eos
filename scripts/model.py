@@ -181,7 +181,7 @@ class TransformerModelEOS(nn.Module):
             self,
             state_embedder: FloatEmbedder,
             action_embedder: FloatEmbedder,
-            pos_encoder: PositionalEncoder,
+            pos_encoder: SegmentPositionalEncoder,
             transformer: EOSTransformer,
             projector: StochasticProjector,
             a_conversions: torch.tensor
