@@ -42,17 +42,17 @@
         ]
     },
     "Soft Actor-Critic": {
-        "version": "OpenAI",
+        "version": "Original",
         "replay_buffer_size": 1000000,
         "minimum_samples": 1000,
         "batch_size": 32,
         "environment_steps": 5,
         "gradient_steps": 1,
         "reward_scale": 0.1,
-        "lambda_v": 1e-4,
-        "lambda_q": 1e-4,
-        "lambda_pi": 1e-5,
-        "tau": 5e-3,
+        "lr_v": 1e-4,
+        "lr_q": 1e-4,
+        "lr_pi": 1e-5,
+        "smooth_coeff": 5e-3,
         "discount": 0.4,
         "temperature": 1.0
     }

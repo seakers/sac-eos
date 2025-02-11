@@ -212,7 +212,7 @@ class SoftActorCritic():
         # Plot the losses
         self.plot_losses(self.losses)
 
-    def create_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
+    def create_entities(self) -> tuple[Actor, QNetwork, QNetwork, QNetwork, QNetwork, VNetwork, VNetwork]:
         """
         Create the entities for the SAC algorithm.
         """
@@ -302,7 +302,7 @@ class SoftActorCritic():
         )
 
         # Create the actor
-        actor = Actor(model, lr=self.lambda_pi)
+        actor = Actor(model, lr=self.lr_pi)
 
         # Create the NNs for the Q-networks
         q1, q1tg, q2, q2tg, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
@@ -326,7 +326,7 @@ class SoftActorCritic():
         )
 
         # Create the actor
-        actor = Actor(model, lr=self.lambda_pi)
+        actor = Actor(model, lr=self.lr_pi)
 
         # Create the NNs for the Q-networks
         q1, q1tg, q2, q2tg, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
@@ -341,18 +341,18 @@ class SoftActorCritic():
         Create the neural networks for the Q-networks and the V-networks.
         """
         # Create the NNs for the Q-networks
-        q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
-        q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
-        q1tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
-        q2tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
+        q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q1tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q2tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
 
         # Set the qtg networks to the same weights as their normal network
         q1tg.load_state_dict(q1.state_dict())
         q2tg.load_state_dict(q2.state_dict())
 
         # Create the NNs for the V-networks
-        v = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
-        vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
+        v = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
+        vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
 
         # Set the vtg network to the same weights as the v network
         vtg.load_state_dict(v.state_dict())
@@ -663,8 +663,8 @@ class SoftActorCritic():
                 # Soft update the target V-network
                 with torch.no_grad():
                     for v_params, vtg_params in zip(v.parameters(), vtg.parameters()):
-                        vtg_params.data.mul_(1 - self.tau)
-                        vtg_params.data.add_(self.tau * v_params.data)
+                        vtg_params.data.mul_(1 - self.smooth_coeff)
+                        vtg_params.data.add_(self.smooth_coeff * v_params.data)
 
                 if not g == 0 and not self.debug:
                     sys.stdout.write("\033[F")
@@ -828,12 +828,12 @@ class SoftActorCritic():
                 # Soft update the target Q-networks
                 with torch.no_grad():
                     for q1_params, q1tg_params in zip(q1.parameters(), q1tg.parameters()):
-                        q1tg_params.data.mul_(1 - self.tau)
-                        q1tg_params.data.add_(self.tau * q1_params.data)
+                        q1tg_params.data.mul_(1 - self.smooth_coeff)
+                        q1tg_params.data.add_(self.smooth_coeff * q1_params.data)
 
                     for q2_params, q2tg_params in zip(q2.parameters(), q2tg.parameters()):
-                        q2tg_params.data.mul_(1 - self.tau)
-                        q2tg_params.data.add_(self.tau * q2_params.data)
+                        q2tg_params.data.mul_(1 - self.smooth_coeff)
+                        q2tg_params.data.add_(self.smooth_coeff * q2_params.data)
 
                 if not g == 0 and not self.debug:
                     sys.stdout.write("\033[F")
