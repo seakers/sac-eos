@@ -174,23 +174,40 @@ class SoftActorCritic():
         Start the SAC algorithm.
         """
         # Create the agent and the critics
-        actor, q1, q2, v, vtg = self.create_entities()
+        actor, q1, q1tg, q2, q2tg, v, vtg = self.create_entities()
 
-        # Move items to gpu
+        # Move actor to gpu
         actor = actor.to(self.gpu_device)
-        q1 = q1.to(self.gpu_device)
-        q2 = q2.to(self.gpu_device)
-        v = v.to(self.gpu_device)
-        vtg = vtg.to(self.gpu_device)
 
         # Warm up the agent
         list_states, list_actions = self.warm_up(actor)
 
-        # Train the agent
-        actor, q1, q2, v, vtg = self.train(actor, q1, q2, v, vtg, list_states, list_actions)
+        if self.version == "Original":
+            # Move critics to gpu
+            q1 = q1.to(self.gpu_device)
+            q2 = q2.to(self.gpu_device)
+            v = v.to(self.gpu_device)
+            vtg = vtg.to(self.gpu_device)
 
-        # Save the model
-        self.save_model(actor, q1, q2, v, vtg)
+            # Train the agent
+            actor, q1, q2, v, vtg = self.train_original(actor, q1, q2, v, vtg, list_states, list_actions)
+
+            # Save the model
+            self.save_model(actor, q1, q2, v, vtg)
+        elif self.version == "OpenAI":
+            # Move critics to gpu
+            q1 = q1.to(self.gpu_device)
+            q1tg = q1tg.to(self.gpu_device)
+            q2 = q2.to(self.gpu_device)
+            q2tg = q2tg.to(self.gpu_device)
+
+            # Train the agent
+            actor, q1, q1tg, q2, q2tg = self.train_openai(actor, q1, q1tg, q2, q2tg, list_states, list_actions)
+
+            # Save the model
+            self.save_model(actor, q1, q1tg, q2, q2tg)
+        else:
+            raise ValueError("The version of the SAC algorithm is not recognized. Please try 'Original' or 'openAI'.")
 
         # Plot the losses
         self.plot_losses(self.losses)
@@ -209,14 +226,14 @@ class SoftActorCritic():
 
         # Select the exact configuration for the model
         if self.architecture_used == "Transformer":
-            actor, q1, q2, v, vtg = self.create_transformer_entities()
+            actor, q1, q1tg, q2, q2tg, v, vtg = self.create_transformer_entities()
         elif self.architecture_used == "MLP":
-            actor, q1, q2, v, vtg = self.create_mlp_entities()
+            actor, q1, q1tg, q2, q2tg, v, vtg = self.create_mlp_entities()
 
         # Set scaling factor
         self.scaling_factor = actor.model.scaling_factor
 
-        return actor, q1, q2, v, vtg
+        return actor, q1, q1tg, q2, q2tg, v, vtg
 
     def create_transformer_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
         """
@@ -288,12 +305,12 @@ class SoftActorCritic():
         actor = Actor(model, lr=self.lambda_pi)
 
         # Create the NNs for the Q-networks
-        q1, q2, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
+        q1, q1tg, q2, q2tg, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
 
         # Load the previous models if they exist
-        actor, q1, q2, v, vtg = self.load_previous_models(actor, q1, q2, v, vtg)
+        actor, q1, q1tg, q2, q2tg, v, vtg = self.load_previous_models(actor, q1, q1tg, q2, q2tg, v, vtg)
 
-        return actor, q1, q2, v, vtg
+        return actor, q1, q1tg, q2, q2tg, v, vtg
     
     def create_mlp_entities(self):
         """
@@ -312,12 +329,12 @@ class SoftActorCritic():
         actor = Actor(model, lr=self.lambda_pi)
 
         # Create the NNs for the Q-networks
-        q1, q2, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
+        q1, q1tg, q2, q2tg, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
 
         # Load the previous models if they exist
-        actor, q1, q2, v, vtg = self.load_previous_models(actor, q1, q2, v, vtg)
+        actor, q1, q1tg, q2, q2tg, v, vtg = self.load_previous_models(actor, q1, q1tg, q2, q2tg, v, vtg)
 
-        return actor, q1, q2, v, vtg
+        return actor, q1, q1tg, q2, q2tg, v, vtg
     
     def create_nn_critics(self, aug_state_contains_actions: bool=True) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
         """
@@ -326,6 +343,12 @@ class SoftActorCritic():
         # Create the NNs for the Q-networks
         q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
         q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
+        q1tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
+        q2tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_q, aug_state_contains_actions=aug_state_contains_actions)
+
+        # Set the qtg networks to the same weights as their normal network
+        q1tg.load_state_dict(q1.state_dict())
+        q2tg.load_state_dict(q2.state_dict())
 
         # Create the NNs for the V-networks
         v = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lambda_v, aug_state_contains_actions=aug_state_contains_actions)
@@ -334,20 +357,19 @@ class SoftActorCritic():
         # Set the vtg network to the same weights as the v network
         vtg.load_state_dict(v.state_dict())
 
-        return q1, q2, v, vtg
+        return q1, q1tg, q2, q2tg, v, vtg
     
-    def load_previous_models(self, actor: Actor, q1: nn.Module, q2: nn.Module, v: nn.Module, vtg: nn.Module):
+    def load_previous_models(self, actor: Actor, q1: QNetwork, q1tg: QNetwork, q2: QNetwork, q2tg: QNetwork, v: VNetwork, vtg: VNetwork):
         """
         Load the previous models if they exist.
         """
         # Load the previous models if they exist
         if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):
             print("Loading previous models...")
-            actor.model.load_state_dict(torch.load(f"{self.save_path}/model.pth", weights_only=True))
-            q1.load_state_dict(torch.load(f"{self.save_path}/q1.pth", weights_only=True))
-            q2.load_state_dict(torch.load(f"{self.save_path}/q2.pth", weights_only=True))
-            v.load_state_dict(torch.load(f"{self.save_path}/v.pth", weights_only=True))
-            vtg.load_state_dict(torch.load(f"{self.save_path}/vtg.pth", weights_only=True))
+            args = {"model": actor.model, "q1": q1, "q1tg": q1tg, "q2": q2, "q2tg": q2tg, "v": v, "vtg": vtg}
+            for key, value in args.items():
+                if os.path.exists(f"{self.save_path}/{key}.pth"):
+                    value.load_state_dict(torch.load(f"{self.save_path}/{key}.pth", weights_only=True))
 
         if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}/buffer.pth"):
             print("Loading previous replay buffer...")
@@ -364,7 +386,7 @@ class SoftActorCritic():
             storage = ListStorage(max_size=self.replay_buffer_size)
             self.replay_buffer = ReplayBuffer(storage=storage)
 
-        return actor, q1, q2, v, vtg
+        return actor, q1, q1tg, q2, q2tg, v, vtg
 
     def warm_up(self, actor: Actor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         """
@@ -417,76 +439,15 @@ class SoftActorCritic():
                 states = list_states[idx]
                 actions = list_actions[idx]
 
-                with torch.no_grad():
-                    # Adjust the maximum length of the states and actions
-                    states = states[:, -self.max_len:, :].to(self.gpu_device)
-                    actions = actions[:, -self.max_len:, :].to(self.gpu_device)
+                done, next_states, next_actions = self.do_1_experience(actor, states, actions, agt)
 
-                    if self.debug:
-                        before = perf_counter()
+                # Break if time is up
+                if done:
+                    break
 
-                    # Get the stochastic actions
-                    stochastic_actions = actor(states, actions)
-
-                    # Select the last stochastic action
-                    a_sto = stochastic_actions[-1, -1, :, :] # get a 2-dim tensor with the last stochastic action
-
-                    # Sample and convert the action
-                    _, a, a_norm = actor.model.reparametrization_trick(a_sto)
-
-                    if self.debug:
-                        print(f"Time taken to get the action: {perf_counter() - before:.4f} seconds")
-
-                    if self.debug:
-                        before = perf_counter()
-
-                    # --------------- Environment's job to provide info ---------------
-                    sending_data = {
-                        "agent_id": agt,
-                        "action": {
-                            "d_pitch": a[0].item(),
-                            "d_roll": a[1].item()
-                        },
-                        "delta_time": self.time_increment
-                    }
-                    
-                    state, reward, done = self.client.get_next_state("get_next", sending_data)
-
-                    if self.debug:
-                        print(f"Time taken to get the next state: {perf_counter() - before:.4f} seconds")
-
-                    # Break if time is up
-                    if done:
-                        print("Time is up!")
-                        break
-
-                    # Normalize the state
-                    vec_state = self.normalize_state(state)
-
-                    # Get the reward
-                    r = torch.FloatTensor([reward * self.reward_scale])
-
-                    # Get the next state
-                    s_next = torch.FloatTensor(vec_state)
-                    # --------------- Environment's job to provide info ---------------
-
-                    # Add it to the states
-                    next_states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
-
-                    # Add it to the actions
-                    next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
-
-                    # Adjust the maximum length of the states and actions
-                    next_states = next_states[:, -self.max_len:, :]
-                    next_actions = next_actions[:, -self.max_len:, :]
-
-                    # Store in the buffer only if the states and actions have the maximum length (or batch processing will collapse)
-                    if states.shape[-2] == self.max_len:
-                        self.replay_buffer.add((states.squeeze(0), actions.squeeze(0), a_norm, r, next_states.squeeze(0), next_actions.squeeze(0))) # batch sampling will unsqueeze the first dimension
-
-                    # Replace the states and actions lists
-                    list_states[idx] = next_states
-                    list_actions[idx] = next_actions
+                # Replace the states and actions lists
+                list_states[idx] = next_states
+                list_actions[idx] = next_actions
 
             # Break if time is up
             if done:
@@ -500,8 +461,69 @@ class SoftActorCritic():
         print("✔ Warm up done!")
         
         return list_states, list_actions
+    
+    def do_1_experience(self, actor: Actor, states: torch.Tensor, actions: torch.Tensor, agt: int):
+        """
+        Do an environment step for the SAC algorithm.
+        """
+        with torch.no_grad():
+            # Adjust the maximum length of the states and actions
+            states = states[:, -self.max_len:, :].to(self.gpu_device)
+            actions = actions[:, -self.max_len:, :].to(self.gpu_device)
 
-    def train(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork, list_states: list[torch.Tensor], list_actions: list[torch.Tensor]):
+            # Get the stochastic actions
+            stochastic_actions = actor(states, actions)
+
+            # Select the last stochastic action
+            a_sto = stochastic_actions[-1, -1, :, :] # get a 2-dim tensor with the last stochastic action
+
+            # Sample and convert the action
+            _, a, a_norm = actor.model.reparametrization_trick(a_sto)
+
+            # --------------- Environment's job to provide info ---------------
+            sending_data = {
+                "agent_id": agt,
+                "action": {
+                    "d_pitch": a[0].item(),
+                    "d_roll": a[1].item()
+                },
+                "delta_time": self.time_increment
+            }
+            
+            state, reward, done = self.client.get_next_state("get_next", sending_data)
+
+            # Break if time is up
+            if done:
+                print("Time is up!")
+                return True, None, None
+
+            # Normalize the state
+            vec_state = self.normalize_state(state)
+
+            # Get the reward
+            r = torch.FloatTensor([reward * self.reward_scale])
+
+            # Get the next state
+            s_next = torch.FloatTensor(vec_state)
+            # --------------- Environment's job to provide info ---------------
+
+            # Add it to the states
+            next_states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
+
+            # Add it to the actions
+            next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
+
+            # Adjust the maximum length of the states and actions
+            next_states = next_states[:, -self.max_len:, :]
+            next_actions = next_actions[:, -self.max_len:, :]
+
+            # Store in the buffer only if the states and actions have the maximum length (or batch processing will collapse)
+            if states.shape[-2] == self.max_len:
+                self.replay_buffer.add((states.squeeze(0), actions.squeeze(0), a_norm, r, next_states.squeeze(0), next_actions.squeeze(0))) # batch sampling will unsqueeze the first dimension
+
+            return False, next_states, next_actions
+
+    def train_original(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork, list_states: list[torch.Tensor], list_actions: list[torch.Tensor]):
         """
         Begin the training of the SAC algorithm.
         """
@@ -517,7 +539,7 @@ class SoftActorCritic():
         done = False
         iteration = 1
 
-        print("Starting training...")
+        print("Starting training with the original algorithm...")
 
         # Loop over all iterations
         while not done:
@@ -531,64 +553,16 @@ class SoftActorCritic():
                     states = list_states[idx]
                     actions = list_actions[idx]
 
-                    with torch.no_grad():
-                        # Adjust the maximum length of the states and actions
-                        states = states[:, -self.max_len:, :].to(self.gpu_device)
-                        actions = actions[:, -self.max_len:, :].to(self.gpu_device)
+                    # Do an environment step
+                    done, next_states, next_actions = self.do_1_experience(actor, states, actions, agt)
 
-                        # Get the stochastic actions
-                        stochastic_actions = actor(states, actions)
+                    # Break if time is up
+                    if done:
+                        break
 
-                        # Select the last stochastic action
-                        a_sto = stochastic_actions[-1, -1, :, :] # get a 2-dim tensor with the last stochastic action
-
-                        # Sample and convert the action
-                        _, a, a_norm = actor.model.reparametrization_trick(a_sto)
-
-                        # --------------- Environment's job to provide info ---------------
-                        sending_data = {
-                            "agent_id": agt,
-                            "action": {
-                                "d_pitch": a[0].item(),
-                                "d_roll": a[1].item()
-                            },
-                            "delta_time": self.time_increment
-                        }
-                        
-                        state, reward, done = self.client.get_next_state("get_next", sending_data)
-
-                        # Break if time is up
-                        if done:
-                            print("Time is up!")
-                            break
-
-                        # Normalize the state
-                        vec_state = self.normalize_state(state)
-
-                        # Get the reward
-                        r = torch.FloatTensor([reward * self.reward_scale])
-
-                        # Get the next state
-                        s_next = torch.FloatTensor(vec_state)
-                        # --------------- Environment's job to provide info ---------------
-
-                        # Add it to the states
-                        next_states = torch.cat([states, s_next.unsqueeze(0).unsqueeze(0).to(self.gpu_device)], dim=1)
-
-                        # Add it to the actions
-                        next_actions = torch.cat([actions, a_norm.unsqueeze(0).unsqueeze(0)], dim=1)
-
-                        # Adjust the maximum length of the states and actions
-                        next_states = next_states[:, -self.max_len:, :]
-                        next_actions = next_actions[:, -self.max_len:, :]
-
-                        # Store in the buffer only if the states and actions have the maximum length (or batch processing will collapse)
-                        if states.shape[-2] == self.max_len:
-                            self.replay_buffer.add((states.squeeze(0), actions.squeeze(0), a_norm, r, next_states.squeeze(0), next_actions.squeeze(0))) # batch sampling will unsqueeze the first dimension
-
-                        # Replace the states and actions lists
-                        list_states[idx] = next_states
-                        list_actions[idx] = next_actions
+                    # Replace the states and actions lists
+                    list_states[idx] = next_states
+                    list_actions[idx] = next_actions
 
                 # Break if time is up
                 if done:
@@ -647,7 +621,7 @@ class SoftActorCritic():
 
                 if self.debug:
                     print("LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
-                    print("Shape of LogProbDen:", log_prob.shape, "Shape of the targets:", target_v.shape, target_q.shape)
+                    print("Shapes --> LogProbDen:", log_prob.shape, "Target values:", target_v.shape, target_q.shape)
 
                 # Set the gradients to zero
                 optimizer_v.zero_grad()
@@ -700,6 +674,175 @@ class SoftActorCritic():
 
         return actor, q1, q2, v, vtg
     
+    def train_openai(self, actor: Actor, q1: QNetwork, q1tg: QNetwork, q2: QNetwork, q2tg: QNetwork, list_states: list[torch.Tensor], list_actions: list[torch.Tensor]):
+        """
+        Begin the training of the SAC algorithm.
+        """
+        torch.autograd.set_detect_anomaly(True)
+
+        # Optimizers
+        optimizer_q1 = optim.Adam(q1.parameters(), lr=q1.lr)
+        optimizer_q2 = optim.Adam(q2.parameters(), lr=q2.lr)
+        optimizer_pi = optim.Adam(actor.model.parameters(), lr=actor.lr)
+
+        # Loop flags
+        done = False
+        iteration = 1
+
+        print("Starting training with the OpenAI version of the algorithm...")
+
+        # Loop over all iterations
+        while not done:
+            print(f"\nStarting iteration {iteration}...")
+            iteration += 1
+
+            # Loop over all environment steps
+            for e in range(self.environment_steps):
+                # Loop over all agents
+                for idx, agt in enumerate(self.agents):
+                    states = list_states[idx]
+                    actions = list_actions[idx]
+
+                    # Do an environment step
+                    done, next_states, next_actions = self.do_1_experience(actor, states, actions, agt)
+
+                    # Break if time is up
+                    if done:
+                        break
+
+                    # Replace the states and actions lists
+                    list_states[idx] = next_states
+                    list_actions[idx] = next_actions
+
+                # Break if time is up
+                if done:
+                    break
+
+                if not e == 0:
+                    sys.stdout.write("\033[F")
+                print(f"Environment step {e+1}/{self.environment_steps} done!")
+            
+            # Break if time is up
+            if done:
+                break
+
+            # Loop over all gradient steps
+            for g in range(self.gradient_steps):
+                with torch.no_grad():
+                    states, actions, a_norm, r, next_states, next_actions = self.tensor_manager.full_squeeze(*self.replay_buffer.sample(self.batch_size))
+
+                if self.debug:
+                    print("Shapes of buffer sampling:", states.shape, actions.shape, a_norm.shape, r.shape, next_states.shape, next_actions.shape)
+
+                # Batchify the tensors neccessary for the transformer
+                states, actions, next_states, next_actions = self.tensor_manager.batchify(states, actions, next_states, next_actions) # batchify if necessary
+
+                # -----------------------------------------------------------------------------------------
+
+                # Get the stochastic actions again
+                new_stochastic_actions = actor(states.to(self.gpu_device), actions.to(self.gpu_device))
+
+                # Select the last stochastic action
+                a_new_sto = new_stochastic_actions[:, -1, :, :]
+
+                # Sample and convert the action
+                a_new_preconv, _, a_new_norm = actor.model.reparametrization_trick(a_new_sto)
+
+                # Find the minimum of the Q-networks for the replay buffer sample and the new action
+                q1_replay: torch.Tensor = q1(states, actions, a_norm)
+                q2_replay: torch.Tensor = q2(states, actions, a_norm)
+                qmin_new: torch.Tensor = torch.min(q1(states, actions, a_new_norm), q2(states, actions, a_new_norm))
+
+                k = 1 / self.scaling_factor
+                corrective_terms = k / torch.cosh(a_new_preconv / self.scaling_factor)**2 # 1 - tanh^2 = sech^2 = 1 / cosh^2
+                normal_dist = torch.distributions.Normal(a_new_sto[:, :, 0], torch.exp(a_new_sto[:, :, 1]))
+                log_prob: torch.Tensor = normal_dist.log_prob(a_new_preconv).sum(dim=-1) - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1)
+                log_prob = log_prob.unsqueeze(-1) # add the last dimension, given that the sum contracted it
+
+                # -----------------------------------------------------------------------------------------
+
+                # Get the stochastic actions again
+                next_new_stochastic_actions = actor(next_states.to(self.gpu_device), next_actions.to(self.gpu_device))
+
+                # Select the last stochastic action
+                a_next_new_sto = next_new_stochastic_actions[:, -1, :, :]
+
+                # Sample and convert the action
+                a_next_new_preconv, _, a_next_new_norm = actor.model.reparametrization_trick(a_next_new_sto)
+
+                # Find the minimum of the Q-networks for the replay buffer sample and the new action
+                qtgmin_next_new: torch.Tensor = torch.min(q1tg(next_states, next_actions, a_next_new_norm), q2tg(next_states, next_actions, a_next_new_norm))
+
+                k = 1 / self.scaling_factor
+                corrective_terms = k / torch.cosh(a_next_new_preconv / self.scaling_factor)**2 # 1 - tanh^2 = sech^2 = 1 / cosh^2
+                normal_dist = torch.distributions.Normal(a_next_new_sto[:, :, 0], torch.exp(a_next_new_sto[:, :, 1]))
+                log_prob_next: torch.Tensor = normal_dist.log_prob(a_next_new_preconv).sum(dim=-1) - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1)
+                log_prob_next = log_prob_next.unsqueeze(-1) # add the last dimension, given that the sum contracted it
+
+
+                # ------------------------------------- CLARIFICATION -------------------------------------
+                # Each loss is 0.5 * (prediction - target)^2 = 0.5 * MSE(prediction, target)
+                # It is not the same the target VALUE of v (in a certain step) and the target NETWORK of v
+                # -----------------------------------------------------------------------------------------
+
+                # Target value for each loss
+                with torch.no_grad():
+                    target_q: torch.Tensor = r + self.discount * (qtgmin_next_new - self.temperature * log_prob_next)
+
+                if self.debug:
+                    print("Current state --> LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
+                    print("Next state --> LogProbDenBasic:", normal_dist.log_prob(a_next_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
+                    print("Shapes --> Current and next LogProbDen:", log_prob.shape, log_prob_next.shape, "Q-network targets:", target_q.shape)
+
+                # Set the gradients to zero
+                optimizer_q1.zero_grad()
+                optimizer_q2.zero_grad()
+                optimizer_pi.zero_grad()
+
+                # Compute the losses
+                J_q1: torch.Tensor = 0.5 * self.mse_loss(q1_replay, target_q)
+                J_q2: torch.Tensor = 0.5 * self.mse_loss(q2_replay, target_q)
+                J_pi: torch.Tensor = self.temperature * log_prob.mean() - qmin_new.mean()
+
+                if self.debug:
+                    print("Q1 ---> Loss:", f"{J_q1.item():.3f}", "Forward:", f"{q1_replay.mean().item():.3f}", "Target:", f"{target_q.mean().item():.3f}")
+                    print("Q2 ---> Loss:", f"{J_q2.item():.3f}", "Forward:", f"{q2_replay.mean().item():.3f}", "Target:", f"{target_q.mean().item():.3f}")
+                    print("Pi ---> Loss:", f"{J_pi.item():.3f}", "Qmin:", f"{qmin_new.mean().item():.3f}", "Alpha:", f"{self.temperature:.3f}", "LogProbDen:", f"{log_prob.mean().item():.3f}")
+                    print("Qtgmin next --> Forward:", f"{qtgmin_next_new.mean().item():.3f}", "Reward:", f"{r.mean().item():.3f}")
+
+                # Store the losses
+                self.losses["q1"].append(J_q1.item())
+                self.losses["q2"].append(J_q2.item())
+                self.losses["pi"].append(J_pi.item())
+
+                # Backpropagate
+                J_q1.backward(retain_graph=True)
+                J_q2.backward(retain_graph=True)
+                J_pi.backward(retain_graph=True)
+
+                # Optimize parameters
+                optimizer_q1.step()
+                optimizer_q2.step()
+                optimizer_pi.step()
+
+                # Soft update the target Q-networks
+                with torch.no_grad():
+                    for q1_params, q1tg_params in zip(q1.parameters(), q1tg.parameters()):
+                        q1tg_params.data.mul_(1 - self.tau)
+                        q1tg_params.data.add_(self.tau * q1_params.data)
+
+                    for q2_params, q2tg_params in zip(q2.parameters(), q2tg.parameters()):
+                        q2tg_params.data.mul_(1 - self.tau)
+                        q2tg_params.data.add_(self.tau * q2_params.data)
+
+                if not g == 0 and not self.debug:
+                    sys.stdout.write("\033[F")
+                print(f"Gradient step {g+1}/{self.gradient_steps} done!")
+
+            print("✔ Iteration done!")
+
+        return actor, q1, q1tg, q2, q2tg
+    
     def normalize_state(self, state: dict) -> list:
         """
         Normalize the state dictionary to a list.
@@ -746,13 +889,22 @@ class SoftActorCritic():
 
         plt.savefig(f"{self.save_path}/losses.png", dpi=500)
     
-    def save_model(self, actor: Actor, q1: QNetwork, q2: QNetwork, v: VNetwork, vtg: VNetwork):
+    def save_model(self, actor: Actor=None, q1: QNetwork=None, q1tg: QNetwork=None, q2: QNetwork=None, q2tg: QNetwork=None, v: VNetwork=None, vtg: VNetwork=None):
         """
         Save the model to the specified path.
         """
-        torch.save(actor.model.state_dict(), f"{self.save_path}/model.pth")
-        torch.save(q1.state_dict(), f"{self.save_path}/q1.pth")
-        torch.save(q2.state_dict(), f"{self.save_path}/q2.pth")
-        torch.save(v.state_dict(), f"{self.save_path}/v.pth")
-        torch.save(vtg.state_dict(), f"{self.save_path}/vtg.pth")
+        # Check if the directory exists
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+
+        # Save the models if they are not None
+        args = {"model": actor.model, "q1": q1, "q1tg": q1tg, "q2": q2, "q2tg": q2tg, "v": v, "vtg": vtg}
+        for key, value in args.items():
+            if os.path.exists(f"{self.save_path}/{key}.pth"):
+                os.remove(f"{self.save_path}/{key}.pth")
+            if value is not None:
+                torch.save(value.state_dict(), f"{self.save_path}/{key}.pth")
+                args[key] = 1
+        
+        print(f"Models {[key for key, value in args.items() if value == 1]} saved!")
         torch.save(list(self.replay_buffer.storage), f"{self.save_path}/buffer.pth")

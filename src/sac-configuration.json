@@ -1,19 +1,18 @@
 {
     "General": {
-        "debug": false,
+        "debug": true,
         "load_model": false,
-        "load_buffer": false,
-        "batch_size": 32
+        "load_buffer": false
     },
     "Environment": {
-        "state_dim": 8,
+        "state_dim": 14,
         "action_dim": 2,
         "a_conversions": [90, 180],
         "time_increment": 60,
         "agents": [0]
     },
     "Architecture": {
-        "architecture_used": "Transformer",
+        "architecture_used": "MLP",
         "architectures_available": [
             {
                 "name": "Transformer",
@@ -43,16 +42,18 @@
         ]
     },
     "Soft Actor-Critic": {
+        "version": "OpenAI",
         "replay_buffer_size": 1000000,
-        "minimum_samples": 50,
+        "minimum_samples": 1000,
+        "batch_size": 32,
         "environment_steps": 5,
-        "gradient_steps": 5,
+        "gradient_steps": 1,
         "reward_scale": 0.1,
         "lambda_v": 1e-4,
         "lambda_q": 1e-4,
         "lambda_pi": 1e-5,
         "tau": 5e-3,
-        "discount": 0.2,
+        "discount": 0.4,
         "temperature": 1.0
     }
 }
