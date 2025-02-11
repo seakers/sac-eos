@@ -617,7 +617,7 @@ class SoftActorCritic():
                 # Target value for each loss
                 with torch.no_grad():
                     target_v: torch.Tensor = qmin_new - self.temperature * log_prob
-                    target_q: torch.Tensor = r + self.discount * vtg_replay_next
+                    target_q: torch.Tensor = r.to(self.gpu_device) + self.discount * vtg_replay_next
 
                 if self.debug:
                     print("LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
