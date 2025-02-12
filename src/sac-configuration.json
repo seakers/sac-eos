@@ -5,14 +5,14 @@
         "load_buffer": false
     },
     "Environment": {
-        "state_dim": 14,
+        "state_dim": 8,
         "action_dim": 2,
         "a_conversions": [90, 180],
         "time_increment": 60,
         "agents": [0]
     },
     "Architecture": {
-        "architecture_used": "MLP",
+        "architecture_used": "Transformer",
         "architectures_available": [
             {
                 "name": "Transformer",
@@ -44,11 +44,13 @@
     "Soft Actor-Critic": {
         "version": "Original",
         "replay_buffer_size": 1000000,
-        "minimum_samples": 1000,
-        "batch_size": 32,
+        "minimum_samples": 100,
+        "batch_size": 64,
         "environment_steps": 5,
         "gradient_steps": 1,
         "reward_scale": 0.1,
+        "critics_atoms": 1,
+        "truncated_atoms": 1,
         "lr_v": 1e-4,
         "lr_q": 1e-4,
         "lr_pi": 1e-5,

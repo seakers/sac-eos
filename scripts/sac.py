@@ -35,11 +35,12 @@ class Critic(nn.Module):
     """
     Class to represent a Critic in the context of the SAC algorithm. Children class of nn.Module.
     """
-    def __init__(self, in_dim: int, out_dim: int, n_hidden: tuple[int], lr: float=1e-3):
+    def __init__(self, in_dim: int, out_dim: int, trunc: int, n_hidden: tuple[int], lr: float=1e-3):
         super(Critic, self).__init__()
         self.role_type = "Critic"
         self.in_dim = in_dim
         self.out_dim = out_dim
+        self.trunc = trunc
         self.n_hidden = n_hidden
         self.lr = lr
 
@@ -64,13 +65,16 @@ class Critic(nn.Module):
                 init.zeros_(layer.bias)
 
     def forward(self, x):
-        return self.mlp(x)
+        x = self.mlp(x)
+        x, _ = torch.topk(x, k=self.trunc, dim=-1, largest=False)
+        x = x.mean(dim=-1)
+        return x
 
 class QNetwork(Critic):
     """
     Class to represent a Q-network. Children class of Critic.
     """
-    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
+    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, trunc: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
         # Adjust the size of the augmented state based on the architecture
         if aug_state_contains_actions:
             aug_state_size = (state_dim + action_dim) * max_len
@@ -78,7 +82,7 @@ class QNetwork(Critic):
             aug_state_size = state_dim * max_len
         
         # Create the class with the parent class initializer
-        super(QNetwork, self).__init__(in_dim=(aug_state_size + action_dim), out_dim=out_dim, n_hidden=n_hidden, lr=lr)
+        super(QNetwork, self).__init__(in_dim=(aug_state_size + action_dim), out_dim=out_dim, trunc=trunc, n_hidden=n_hidden, lr=lr)
         self.critic_type = "Q-network"
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -109,14 +113,14 @@ class VNetwork(Critic):
     """
     Class to represent a V-network. Children class of Critic.
     """
-    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
+    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, trunc: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
         # Adjust the size of the augmented state based on the architecture
         if aug_state_contains_actions:
             aug_state_size = (state_dim + action_dim) * max_len
         else:
             aug_state_size = state_dim * max_len
 
-        super(VNetwork, self).__init__(in_dim=aug_state_size, out_dim=out_dim, n_hidden=n_hidden, lr=lr)
+        super(VNetwork, self).__init__(in_dim=aug_state_size, out_dim=out_dim, trunc=trunc, n_hidden=n_hidden, lr=lr)
         self.critic_type = "V-network"
         self.state_dim = state_dim
         self.action_dim = action_dim
@@ -235,7 +239,7 @@ class SoftActorCritic():
 
         return actor, q1, q1tg, q2, q2tg, v, vtg
 
-    def create_transformer_entities(self) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
+    def create_transformer_entities(self) -> tuple[Actor, QNetwork, QNetwork, QNetwork, QNetwork, VNetwork, VNetwork]:
         """
         Create the entities for the SAC algorithm with the Transformer architecture.
         """
@@ -336,23 +340,23 @@ class SoftActorCritic():
 
         return actor, q1, q1tg, q2, q2tg, v, vtg
     
-    def create_nn_critics(self, aug_state_contains_actions: bool=True) -> tuple[Actor, QNetwork, QNetwork, VNetwork, VNetwork]:
+    def create_nn_critics(self, aug_state_contains_actions: bool=True) -> tuple[QNetwork, QNetwork, QNetwork, QNetwork, VNetwork, VNetwork]:
         """
         Create the neural networks for the Q-networks and the V-networks.
         """
         # Create the NNs for the Q-networks
-        q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-        q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-        q1tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-        q2tg = QNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q1tg = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
+        q2tg = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
 
         # Set the qtg networks to the same weights as their normal network
         q1tg.load_state_dict(q1.state_dict())
         q2tg.load_state_dict(q2.state_dict())
 
         # Create the NNs for the V-networks
-        v = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
-        vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, 1, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
+        v = VNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
+        vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
 
         # Set the vtg network to the same weights as the v network
         vtg.load_state_dict(v.state_dict())
@@ -568,7 +572,7 @@ class SoftActorCritic():
                 if done:
                     break
 
-                if not e == 0:
+                if not e == 0 and not self.debug:
                     sys.stdout.write("\033[F")
                 print(f"Environment step {e+1}/{self.environment_steps} done!")
             
@@ -718,7 +722,7 @@ class SoftActorCritic():
                 if done:
                     break
 
-                if not e == 0:
+                if not e == 0 and not self.debug:
                     sys.stdout.write("\033[F")
                 print(f"Environment step {e+1}/{self.environment_steps} done!")
             
