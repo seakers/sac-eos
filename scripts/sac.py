@@ -983,7 +983,7 @@ class SoftActorCritic():
                 print(f"Loading {name} model...")
                 model.load_state_dict(torch.load(f"{self.save_path}/{name}.pth", weights_only=True))
             else:
-                raise FileNotFoundError(f"Model {name} does not exist.")
+                raise FileNotFoundError(f"Parameters for {name} do not exist.")
 
     def save_parameters(self, models: dict[str, nn.Module]):
         """
@@ -991,4 +991,4 @@ class SoftActorCritic():
         """
         for name, model in models.items():
             torch.save(model.state_dict(), f"{self.save_path}/{name}.pth")
-            print(f"Model {name} saved!")
+            print(f"Parameters for {name} saved!")
