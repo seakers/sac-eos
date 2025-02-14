@@ -1,14 +1,13 @@
 import torch
-import torchviz
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 from torchrl.data import ReplayBuffer, ListStorage
+
+from types import SimpleNamespace
 
 import sys
 import os
 import warnings
-from time import perf_counter
 import pandas as pd
 import matplotlib.pyplot as plt
 
@@ -22,73 +21,53 @@ class Actor(nn.Module):
     """
     Class to represent an Actor (policy, model) in the context of the SAC algorithm. Children class of nn.Module.
     """
-    def __init__(self, model: TransformerModelEOS, lr: float=1e-3):
+    def __init__(self, model: nn.Module, architecture: str, lr: float=1e-3):
         super(Actor, self).__init__()
-        self.role_type = "Actor"
+        self.__role_type = "Actor"
         self.model = model
+        self.architecture = architecture
         self.lr = lr
 
     def forward(self, states, actions):
-        return self.model(states, actions)
-
-class Critic(nn.Module):
-    """
-    Class to represent a Critic in the context of the SAC algorithm. Children class of nn.Module.
-    """
-    def __init__(self, in_dim: int, out_dim: int, trunc: int, n_hidden: tuple[int], lr: float=1e-3):
-        super(Critic, self).__init__()
-        self.role_type = "Critic"
-        self.in_dim = in_dim
-        self.out_dim = out_dim
-        self.trunc = trunc
-        self.n_hidden = n_hidden
-        self.lr = lr
-
-        layers = []
-        layers.append(nn.Linear(in_dim, n_hidden[0]))
-        layers.append(nn.ReLU())
-
-        for i in range(len(n_hidden) - 1):
-            layers.append(nn.Linear(n_hidden[i], n_hidden[i + 1]))
-            layers.append(nn.ReLU())
+        if self.architecture == "Transformer":
+            return self.model(states, actions)
+        elif self.architecture == "TransformerEncoder":
+            return self.model(states)
+        elif self.architecture == "MLP":
+            return self.model(states)
         
-        layers.append(nn.LayerNorm(n_hidden[-1]))
-        layers.append(nn.Linear(n_hidden[-1], out_dim))
-        self.mlp = nn.Sequential(*layers)
-
-        self.init_weights()
-
-    def init_weights(self):
-        for layer in self.mlp:
-            if isinstance(layer, nn.Linear):
-                init.kaiming_uniform_(layer.weight)
-                init.zeros_(layer.bias)
-
-    def forward(self, x):
-        x = self.mlp(x)
-        x, _ = torch.topk(x, k=self.trunc, dim=-1, largest=False)
-        x = x.mean(dim=-1)
-        return x
-
-class QNetwork(Critic):
+class QNetwork(nn.Module):
     """
-    Class to represent a Q-network. Children class of Critic.
+    Class to represent a Q-network. Children class of nn.Module.
     """
-    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, trunc: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
-        # Adjust the size of the augmented state based on the architecture
-        if aug_state_contains_actions:
-            aug_state_size = (state_dim + action_dim) * max_len
-        else:
-            aug_state_size = state_dim * max_len
-        
-        # Create the class with the parent class initializer
-        super(QNetwork, self).__init__(in_dim=(aug_state_size + action_dim), out_dim=out_dim, trunc=trunc, n_hidden=n_hidden, lr=lr)
-        self.critic_type = "Q-network"
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        max_len: int,
+        n_atoms: int,
+        truncated_atoms: int,
+        model: nn.Module,
+        architecture: str,
+        lr: float,
+        obs_has_actions: bool
+    ):
+        super(QNetwork, self).__init__()
+        self.__role_type = "Q-network"
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.max_len = max_len
-        self.aug_state_contains_actions = aug_state_contains_actions
-        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.n_atoms = n_atoms
+        self.truncated_atoms = truncated_atoms
+        self.model = model
+        self.architecture = architecture
+        self.lr = lr
+        self.obs_has_actions = obs_has_actions
+
+        self.mlp = nn.Sequential(
+            nn.Linear(model.out_dim + action_dim, n_atoms),
+            nn.ReLU()
+        )
 
     def forward(self, states, actions, new_action):
         if states.shape[-2] != actions.shape[-2]:
@@ -99,34 +78,53 @@ class QNetwork(Critic):
             states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1], device=self.gpu_device)], dim=-2)
             actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1], device=self.gpu_device)], dim=-2)
 
-        if self.aug_state_contains_actions:
-            aug_state_1D = torch.cat([states, actions], dim=-1).view(states.shape[0], -1)
-        else:
-            aug_state_1D = states.view(states.shape[0], -1)
-
-        x = torch.cat([aug_state_1D, new_action], dim=-1)
-        x = super(QNetwork, self).forward(x)
-        return x
-    
-class VNetwork(Critic):
-
+        if self.architecture == "Transformer":
+            x = self.model(states, actions)[:, -1, :]
+            x = self.mlp(torch.cat([x, new_action], dim=-1))
+        elif self.architecture == "TransformerEncoder":
+            x = self.model(states)[:, -1, :]
+            x = self.mlp(torch.cat([x, new_action], dim=-1))
+        elif self.architecture == "MLP":
+            if self.obs_has_actions:
+                x = torch.cat([states, actions], dim=-1).view(states.shape[0], -1)
+            else:
+                x = states.view(states.shape[0], -1)
+                x = torch.cat([x, new_action], dim=-1)
+            x = self.model(x)
+        
+        # Perform the truncation
+        x, _ = torch.topk(x, k=self.truncated_atoms, dim=-1, largest=False)
+        x = x.mean(dim=-1)
+        # Make sure the output is a 2D tensor
+        return x.view(x.shape[0], -1)
+        
+class VNetwork(nn.Module):
     """
-    Class to represent a V-network. Children class of Critic.
+    Class to represent a V-network. Children class of nn.Module.
     """
-    def __init__(self, state_dim: int, action_dim: int, max_len: int, out_dim: int, trunc: int, n_hidden: tuple[int], lr: float=1e-3, aug_state_contains_actions: bool=False):
-        # Adjust the size of the augmented state based on the architecture
-        if aug_state_contains_actions:
-            aug_state_size = (state_dim + action_dim) * max_len
-        else:
-            aug_state_size = state_dim * max_len
-
-        super(VNetwork, self).__init__(in_dim=aug_state_size, out_dim=out_dim, trunc=trunc, n_hidden=n_hidden, lr=lr)
-        self.critic_type = "V-network"
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        max_len: int,
+        n_atoms: int,
+        truncated_atoms: int,
+        model: nn.Module,
+        architecture: str,
+        lr: float,
+        obs_has_actions: bool
+    ):
+        super(VNetwork, self).__init__()
+        self.__role_type = "V-network"
         self.state_dim = state_dim
         self.action_dim = action_dim
         self.max_len = max_len
-        self.aug_state_contains_actions = aug_state_contains_actions
-        self.gpu_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.n_atoms = n_atoms
+        self.truncated_atoms = truncated_atoms
+        self.model = model
+        self.architecture = architecture
+        self.lr = lr
+        self.obs_has_actions = obs_has_actions
 
     def forward(self, states, actions):
         if states.shape[-2] != actions.shape[-2]:
@@ -137,14 +135,22 @@ class VNetwork(Critic):
             states = torch.cat([states, torch.zeros(states.shape[0], self.max_len - states.shape[-2], states.shape[-1], device=self.gpu_device)], dim=-2)
             actions = torch.cat([actions, torch.zeros(actions.shape[0], self.max_len - actions.shape[-2], actions.shape[-1], device=self.gpu_device)], dim=-2)
 
-        if self.aug_state_contains_actions:
-            aug_state_1D = torch.cat([states, actions], dim=-1).view(states.shape[0], -1)
-        else:
-            aug_state_1D = states.view(states.shape[0], -1)
+        if self.architecture == "Transformer":
+            x = self.model(states, actions)[:, -1, :]
+        elif self.architecture == "TransformerEncoder":
+            x = self.model(states)[:, -1, :]
+        elif self.architecture == "MLP":
+            if self.obs_has_actions:
+                x = torch.cat([states, actions], dim=-1).view(states.shape[0], -1)
+            else:
+                x = states.view(states.shape[0], -1)
+            x = self.model(x)
 
-        x = aug_state_1D
-        x = super(VNetwork, self).forward(x)
-        return x
+        # Perform the truncation
+        x, _ = torch.topk(x, k=self.truncated_atoms, dim=-1, largest=False)
+        x = x.mean(dim=-1)
+        # Make sure the output is a 2D tensor
+        return x.view(x.shape[0], -1)
 
 class SoftActorCritic():
     """
@@ -165,217 +171,284 @@ class SoftActorCritic():
     def __str__(self) -> str:
         return f"{self.__role_type} object with configuration: {self.__conf}"
 
-    def set_properties(self, conf: DataFromJSON):
+    def set_properties(self, conf: DataFromJSON, container: object=None):
         """
         Set the properties of the SAC object.
         """
         for key, value in conf.__dict__.items():
             if not key.startswith("__"):
-                setattr(self, key, value)
+                setattr(container if container is not None else self, key, value)
 
     def start(self):
         """
         Start the SAC algorithm.
         """
-        # Create the agent and the critics
-        actor, q1, q1tg, q2, q2tg, v, vtg = self.create_entities()
+        # Create the actor
+        actor = self.create_actor()
 
-        # Move actor to gpu
-        actor = actor.to(self.gpu_device)
+        # Create the replay buffer
+        self.create_replay_buffer()
 
-        # Warm up the agent
-        list_states, list_actions = self.warm_up(actor)
+        if self.algo_version == "Original":
+            # Create the critics
+            q1, q2, v, vtg = self.create_the_critics(["q1", "q2", "v", "vtg"], self.obs_has_actions)
 
-        if self.version == "Original":
-            # Move critics to gpu
-            q1 = q1.to(self.gpu_device)
-            q2 = q2.to(self.gpu_device)
-            v = v.to(self.gpu_device)
-            vtg = vtg.to(self.gpu_device)
-
-            # Train the agent
+            # Warm up the agent
+            list_states, list_actions = self.warm_up(actor)
+            
+            # Train with the original algorithm
             actor, q1, q2, v, vtg = self.train_original(actor, q1, q2, v, vtg, list_states, list_actions)
 
             # Save the model
-            self.save_model(actor, q1, q2, v, vtg)
-        elif self.version == "OpenAI":
-            # Move critics to gpu
-            q1 = q1.to(self.gpu_device)
-            q1tg = q1tg.to(self.gpu_device)
-            q2 = q2.to(self.gpu_device)
-            q2tg = q2tg.to(self.gpu_device)
+            self.save_parameters({"model": actor.model, "q1": q1, "q2": q2, "v": v, "vtg": vtg})
+        elif self.algo_version == "OpenAI":
+            # Create the critics
+            q1, q1tg, q2, q2tg = self.create_the_critics(["q1", "q1tg", "q2", "q2tg"], self.obs_has_actions)
 
-            # Train the agent
+            # Warm up the agent
+            list_states, list_actions = self.warm_up(actor)
+
+            # Train with the OpenAI algorithm
             actor, q1, q1tg, q2, q2tg = self.train_openai(actor, q1, q1tg, q2, q2tg, list_states, list_actions)
 
             # Save the model
-            self.save_model(actor, q1, q1tg, q2, q2tg)
+            self.save_parameters({"model": actor.model, "q1": q1, "q1tg": q1tg, "q2": q2, "q2tg": q2tg})
         else:
             raise ValueError("The version of the SAC algorithm is not recognized. Please try 'Original' or 'openAI'.")
+        
+        # Save the replay buffer
+        self.save_replay_buffer({"buffer": self.replay_buffer.storage._storage})
 
         # Plot the losses
         self.plot_losses(self.losses)
 
-    def create_entities(self) -> tuple[Actor, QNetwork, QNetwork, QNetwork, QNetwork, VNetwork, VNetwork]:
+    def create_actor(self) -> Actor:
         """
         Create the entities for the SAC algorithm.
         """
-        # Add the configuration fiel properties of the architecture chosen
+        # Add the configuration file properties of the architecture chosen
         for i in range(len(self.architectures_available)):
             if self.architectures_available[i]["name"] == self.architecture_used:
                 architecture_conf = DataFromJSON(self.architectures_available[i], "architecture_conf")
                 break
 
-        self.set_properties(architecture_conf)
+        self._actor_conf = SimpleNamespace()
+
+        # Set the properties of the architecture
+        self.set_properties(architecture_conf, self._actor_conf)
+
+        # Assign actor to the Soft Actor-Critic object for generic use
+        self.max_len = self._actor_conf.max_len
+        self.obs_has_actions = self._actor_conf.obs_has_actions
+
+        # Generic properties
+        self._actor_conf.stochastic = True
 
         # Select the exact configuration for the model
         if self.architecture_used == "Transformer":
-            actor, q1, q1tg, q2, q2tg, v, vtg = self.create_transformer_entities()
+            self._actor_conf.src_dim = self.state_dim
+            self._actor_conf.tgt_dim = self.action_dim
+            self._actor_conf.out_dim = self.action_dim
+            model = self.generate_transformer_model(self._actor_conf)
+        elif self.architecture_used == "TransformerEncoder":
+            self._actor_conf.src_dim = self.state_dim
+            self._actor_conf.out_dim = self.action_dim
+            model = self.generate_transformer_encoder_model(self._actor_conf)
         elif self.architecture_used == "MLP":
-            actor, q1, q1tg, q2, q2tg, v, vtg = self.create_mlp_entities()
+            self._actor_conf.in_dim = self.state_dim * self.max_len
+            self._actor_conf.out_dim = self.action_dim
+            model = self.generate_mlp_model(self._actor_conf)
+        else:
+            raise ValueError("The architecture used is not recognized. Please try 'Transformer' or 'MLP'.")
 
         # Set scaling factor
-        self.scaling_factor = actor.model.scaling_factor
+        self.scaling_factor = model.scaling_factor
 
-        return actor, q1, q1tg, q2, q2tg, v, vtg
+        actor = Actor(
+            model=model,
+            architecture=self.architecture_used,
+            lr=self.lr_pi
+        )
 
-    def create_transformer_entities(self) -> tuple[Actor, QNetwork, QNetwork, QNetwork, QNetwork, VNetwork, VNetwork]:
+        # Load the model if it exists
+        self.load_parameters({"model": actor.model})
+
+        return actor.to(self.gpu_device)
+    
+    def create_the_critics(self, critics: tuple[str], obs_has_actions: bool=True) -> tuple[nn.Module, ...]:
         """
-        Create the entities for the SAC algorithm with the Transformer architecture.
+        Create the desired critics for the SAC algorithm.
         """
-        # The segment size is between 2 and 5
-        encoding_segment_size = int(torch.clamp(torch.tensor(self.d_model // 100), min=2, max=5).item()) # segment size is between 2 and 5
-        embed_dim = self.d_model - encoding_segment_size
+        _critics: tuple[nn.Module, ...] = []
 
-        # Create the embedder object for states
-        states_embedder = FloatEmbedder(
-            input_dim=self.state_dim,
-            embed_dim=embed_dim,
-            dropout=self.embed_dropout
-        )
-        
-        # Create the embedder object for actions
-        actions_embedder = FloatEmbedder(
-            input_dim=self.action_dim,
-            embed_dim=embed_dim,
-            dropout=self.embed_dropout
-        )
+        # Add the configuration file properties of the architectures chosen
+        for i in range(len(self.architectures_available)):
+            if self.architectures_available[i]["name"] == self.q_net_architecture:
+                q_conf = DataFromJSON(self.architectures_available[i], "architecture_conf")
+            if self.architectures_available[i]["name"] == self.v_net_architecture:
+                v_conf = DataFromJSON(self.architectures_available[i], "architecture_conf")
 
-        # # Create the positional encoder object
-        # pos_encoder = PositionalEncoder(
-        #     max_len=self.max_len,
-        #     d_model=self.d_model,
-        #     dropout=self.pos_dropout
-        # )
+        self._q_conf = SimpleNamespace()
+        self._v_conf = SimpleNamespace()
 
-        # Create the segment positional encoder object
-        pos_encoder = SegmentPositionalEncoder(
-            max_len=self.max_len,
-            d_model=self.d_model,
-            encoding_segment_size=encoding_segment_size,
-            dropout=self.pos_dropout
-        )
+        # Set the properties of the architectures
+        self.set_properties(q_conf, self._q_conf)
+        self.set_properties(v_conf, self._v_conf)
 
-        # Create the transformer model
-        transformer = EOSTransformer(
-            d_model=self.d_model,
-            nhead=self.nhead,
-            num_encoder_layers=self.num_encoder_layers,
-            num_decoder_layers=self.num_decoder_layers,
-            dim_feedforward=self.dim_feedforward,
-            dropout=self.transformer_dropout,
-            activation=self.activation,
-            batch_first=self.batch_first,
-            kaiming_init=self.kaiming_init
-        )
-        
-        # Create a linear outside stochastic layer called projector
-        stochastic_projector = StochasticProjector(
-            d_model=self.d_model,
-            action_dim=self.action_dim
-        )
-        
-        # Create the model object
-        model = TransformerModelEOS(
-            state_embedder=states_embedder,
-            action_embedder=actions_embedder,
-            pos_encoder=pos_encoder,
-            transformer=transformer,
-            projector=stochastic_projector,
+        # Set generic properties
+        self._q_conf.lr = self.lr_q
+        self._v_conf.lr = self.lr_v
+        self._q_conf.stochastic = False
+        self._v_conf.stochastic = False     
+
+        for critic in critics:
+            if critic.startswith("q"):
+                if self.q_net_architecture == "Transformer":
+                    self._q_conf.src_dim = self.state_dim
+                    self._q_conf.tgt_dim = self.action_dim
+                    self._q_conf.out_dim = self.q_net_mid_dim - self.action_dim
+                    if not obs_has_actions:
+                        raise PermissionError("Q-networks transformers require the actions in the observations.")
+                    model = self.generate_transformer_model(self._q_conf)
+                elif self.q_net_architecture == "TransformerEncoder":
+                    self._q_conf.src_dim = self.state_dim
+                    self._q_conf.out_dim = self.q_net_mid_dim - self.action_dim
+                    model = self.generate_transformer_encoder_model(self._q_conf)
+                elif self.q_net_architecture == "MLP":
+                    self._q_conf.in_dim = self.state_dim * self.max_len + self.action_dim
+                    self._q_conf.out_dim = self.critics_atoms
+                    model = self.generate_mlp_model(self._q_conf)
+                else:
+                    raise ValueError("The architecture used is not recognized. Please try 'Transformer' or 'MLP'.")
+                _critics.append(QNetwork(
+                    state_dim=self.state_dim,
+                    action_dim=self.action_dim,
+                    max_len=self.max_len,
+                    n_atoms=self.critics_atoms,
+                    truncated_atoms=self.truncated_atoms,
+                    model=model,
+                    architecture=self.q_net_architecture,
+                    lr=self.lr_q,
+                    obs_has_actions=obs_has_actions
+                ))
+            if critic.startswith("v"):
+                if self.v_net_architecture == "Transformer":
+                    self._v_conf.src_dim = self.state_dim
+                    self._v_conf.tgt_dim = self.action_dim
+                    self._v_conf.out_dim = self.critics_atoms
+                    if not obs_has_actions:
+                        raise PermissionError("V-networks transformers require the actions in the observations.")
+                    model = self.generate_transformer_model(self._v_conf)
+                elif self.v_net_architecture == "TransformerEncoder":
+                    self._v_conf.src_dim = self.state_dim
+                    self._v_conf.out_dim = self.critics_atoms
+                    model = self.generate_transformer_encoder_model(self._v_conf)
+                elif self.v_net_architecture == "MLP":
+                    self._v_conf.in_dim = self.state_dim * self.max_len
+                    self._v_conf.out_dim = self.critics_atoms
+                    model = self.generate_mlp_model(self._v_conf)
+                else:
+                    raise ValueError("The architecture used is not recognized. Please try 'Transformer' or 'MLP'.")
+                _critics.append(VNetwork(
+                    state_dim=self.state_dim,
+                    action_dim=self.action_dim,
+                    max_len=self.max_len,
+                    n_atoms=self.critics_atoms,
+                    truncated_atoms=self.truncated_atoms,
+                    model=model,
+                    architecture=self.v_net_architecture,
+                    lr=self.lr_v,
+                    obs_has_actions=obs_has_actions
+                ))
+
+        # Critics list to dict of indices
+        critics_dict: dict = {critic: i for i, critic in enumerate(critics)}
+
+        # Set the target networks to the same weights as their normal network
+        if self.load_params:
+            self.load_parameters({name: critic for name, critic in zip(critics, _critics)})
+        else:
+            for name, i in critics_dict.items():
+                if name.endswith("tg"):
+                    j = critics_dict[name.split("tg")[0]]
+                    _critics[i].load_state_dict(_critics[j].state_dict())
+
+        # Put models on the GPU
+        for critic in _critics:
+            critic.to(self.gpu_device)
+
+        return _critics
+
+    def generate_transformer_model(self, base: object=None) -> TransformerModelEOS:
+        """
+        Create the actor for the SAC algorithm with the Transformer architecture.
+        """
+        base = base if base is not None else self
+        return TransformerModelEOS(
+            src_dim=base.src_dim,
+            tgt_dim=base.tgt_dim,
+            out_dim=base.out_dim,
+            d_model=base.d_model,
+            nhead=base.nhead,
+            max_len=base.max_len,
+            num_encoder_layers=base.num_encoder_layers,
+            num_decoder_layers=base.num_decoder_layers,
+            dim_feedforward=base.dim_feedforward,
+            embed_dropout=base.embed_dropout,
+            pos_dropout=base.pos_dropout,
+            transformer_dropout=base.transformer_dropout,
+            position_encoding=base.position_encoding,
+            activation=base.activation,
+            stochastic=base.stochastic,
+            batch_first=base.batch_first,
+            kaiming_init=base.kaiming_init,
             a_conversions=self.a_conversions
         )
-
-        # Create the actor
-        actor = Actor(model, lr=self.lr_pi)
-
-        # Create the NNs for the Q-networks
-        q1, q1tg, q2, q2tg, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
-
-        # Load the previous models if they exist
-        actor, q1, q1tg, q2, q2tg, v, vtg = self.load_previous_models(actor, q1, q1tg, q2, q2tg, v, vtg)
-
-        return actor, q1, q1tg, q2, q2tg, v, vtg
     
-    def create_mlp_entities(self):
+    def generate_transformer_encoder_model(self, base: object=None) -> TransformerEncoderModelEOS:
         """
-        Create the entities for the SAC algorithm with the MLP architecture.
+        Create the actor for the SAC algorithm with the TransformerEncoder architecture.
         """
-        # Create the MLP model
-        model = MLPModelEOS(
-            state_dim=self.state_dim * self.max_len,
-            action_dim=self.action_dim,
-            n_hidden=self.hidden_layers,
-            dropout=self.dropout,
+        base = base if base is not None else self
+        return TransformerEncoderModelEOS(
+            src_dim=base.src_dim,
+            out_dim=base.out_dim,
+            d_model=base.d_model,
+            nhead=base.nhead,
+            max_len=base.max_len,
+            num_encoder_layers=base.num_encoder_layers,
+            dim_feedforward=base.dim_feedforward,
+            embed_dropout=base.embed_dropout,
+            pos_dropout=base.pos_dropout,
+            encoder_dropout=base.encoder_dropout,
+            position_encoding=base.position_encoding,
+            activation=base.activation,
+            stochastic=base.stochastic,
+            batch_first=base.batch_first,
+            kaiming_init=base.kaiming_init,
             a_conversions=self.a_conversions
         )
-
-        # Create the actor
-        actor = Actor(model, lr=self.lr_pi)
-
-        # Create the NNs for the Q-networks
-        q1, q1tg, q2, q2tg, v, vtg = self.create_nn_critics(self.aug_state_contains_actions)
-
-        # Load the previous models if they exist
-        actor, q1, q1tg, q2, q2tg, v, vtg = self.load_previous_models(actor, q1, q1tg, q2, q2tg, v, vtg)
-
-        return actor, q1, q1tg, q2, q2tg, v, vtg
     
-    def create_nn_critics(self, aug_state_contains_actions: bool=True) -> tuple[QNetwork, QNetwork, QNetwork, QNetwork, VNetwork, VNetwork]:
+    def generate_mlp_model(self, base: object=None) -> MLPModelEOS:
         """
-        Create the neural networks for the Q-networks and the V-networks.
+        Create the actor for the SAC algorithm with the MLP architecture.
         """
-        # Create the NNs for the Q-networks
-        q1 = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-        q2 = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-        q1tg = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-        q2tg = QNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_q, aug_state_contains_actions=aug_state_contains_actions)
-
-        # Set the qtg networks to the same weights as their normal network
-        q1tg.load_state_dict(q1.state_dict())
-        q2tg.load_state_dict(q2.state_dict())
-
-        # Create the NNs for the V-networks
-        v = VNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
-        vtg = VNetwork(self.state_dim, self.action_dim, self.max_len, self.critics_atoms, self.truncated_atoms, n_hidden=self.critics_hidden_layers, lr=self.lr_v, aug_state_contains_actions=aug_state_contains_actions)
-
-        # Set the vtg network to the same weights as the v network
-        vtg.load_state_dict(v.state_dict())
-
-        return q1, q1tg, q2, q2tg, v, vtg
+        base = base if base is not None else self
+        return MLPModelEOS(
+            in_dim=base.in_dim,
+            out_dim=base.out_dim,
+            hidden_layers=base.hidden_layers,
+            dropout=base.dropout,
+            stochastic=base.stochastic,
+            a_conversions=self.a_conversions
+        )
     
-    def load_previous_models(self, actor: Actor, q1: QNetwork, q1tg: QNetwork, q2: QNetwork, q2tg: QNetwork, v: VNetwork, vtg: VNetwork):
+    def create_replay_buffer(self) -> None:
         """
         Load the previous models if they exist.
         """
         # Load the previous models if they exist
-        if os.path.exists(self.save_path) and self.load_model and os.path.exists(f"{self.save_path}/model.pth"):
-            print("Loading previous models...")
-            args = {"model": actor.model, "q1": q1, "q1tg": q1tg, "q2": q2, "q2tg": q2tg, "v": v, "vtg": vtg}
-            for key, value in args.items():
-                if os.path.exists(f"{self.save_path}/{key}.pth"):
-                    value.load_state_dict(torch.load(f"{self.save_path}/{key}.pth", weights_only=True))
-
-        if os.path.exists(self.save_path) and self.load_buffer and os.path.exists(f"{self.save_path}/buffer.pth"):
+        if self.load_buffer and os.path.exists(f"{self.save_path}/buffer.pth"):
             print("Loading previous replay buffer...")
             with warnings.catch_warnings():
                 # Ignore the FutureWarning about loading with pickle
@@ -389,8 +462,6 @@ class SoftActorCritic():
             print("Creating new replay buffer...")
             storage = ListStorage(max_size=self.replay_buffer_size)
             self.replay_buffer = ReplayBuffer(storage=storage)
-
-        return actor, q1, q1tg, q2, q2tg, v, vtg
 
     def warm_up(self, actor: Actor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         """
@@ -620,8 +691,9 @@ class SoftActorCritic():
 
                 # Target value for each loss
                 with torch.no_grad():
+                    r = r.to(self.gpu_device)
                     target_v: torch.Tensor = qmin_new - self.temperature * log_prob
-                    target_q: torch.Tensor = r.to(self.gpu_device) + self.discount * vtg_replay_next
+                    target_q: torch.Tensor = r + self.discount * vtg_replay_next
 
                 if self.debug:
                     print("LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
@@ -791,7 +863,7 @@ class SoftActorCritic():
 
                 # Target value for each loss
                 with torch.no_grad():
-                    target_q: torch.Tensor = r + self.discount * (qtgmin_next_new - self.temperature * log_prob_next)
+                    target_q: torch.Tensor = r.to(self.gpu_device) + self.discount * (qtgmin_next_new - self.temperature * log_prob_next)
 
                 if self.debug:
                     print("Current state --> LogProbDenBasic:", normal_dist.log_prob(a_new_preconv).sum(dim=-1).mean(), "-log(corrective):", - torch.log(torch.clamp(corrective_terms, min=1e-5)).sum(dim=-1).mean())
@@ -893,22 +965,30 @@ class SoftActorCritic():
 
         plt.savefig(f"{self.save_path}/losses.png", dpi=500)
     
-    def save_model(self, actor: Actor=None, q1: QNetwork=None, q1tg: QNetwork=None, q2: QNetwork=None, q2tg: QNetwork=None, v: VNetwork=None, vtg: VNetwork=None):
+    def save_replay_buffer(self):
         """
-        Save the model to the specified path.
+        Save the replay buffer.
         """
-        # Check if the directory exists
-        if not os.path.exists(self.save_path):
-            os.makedirs(self.save_path)
-
-        # Save the models if they are not None
-        args = {"model": actor.model, "q1": q1, "q1tg": q1tg, "q2": q2, "q2tg": q2tg, "v": v, "vtg": vtg}
-        for key, value in args.items():
-            if os.path.exists(f"{self.save_path}/{key}.pth"):
-                os.remove(f"{self.save_path}/{key}.pth")
-            if value is not None:
-                torch.save(value.state_dict(), f"{self.save_path}/{key}.pth")
-                args[key] = 1
-        
-        print(f"Models {[key for key, value in args.items() if value == 1]} saved!")
         torch.save(list(self.replay_buffer.storage), f"{self.save_path}/buffer.pth")
+        print("Replay buffer saved!")
+
+    def load_parameters(self, models: dict[str, nn.Module]) -> None:
+        """
+        Load the parameters for every model.
+        """
+        if not self.load_params:
+            return
+        for name, model in models.items():
+            if os.path.exists(f"{self.save_path}/{name}.pth"):
+                print(f"Loading {name} model...")
+                model.load_state_dict(torch.load(f"{self.save_path}/{name}.pth", weights_only=True))
+            else:
+                raise FileNotFoundError(f"Model {name} does not exist.")
+
+    def save_parameters(self, models: dict[str, nn.Module]):
+        """
+        Save the models with the specified name.
+        """
+        for name, model in models.items():
+            torch.save(model.state_dict(), f"{self.save_path}/{name}.pth")
+            print(f"Model {name} saved!")

@@ -1,7 +1,7 @@
 {
     "General": {
         "debug": true,
-        "load_model": false,
+        "load_params": false,
         "load_buffer": false
     },
     "Environment": {
@@ -11,38 +11,56 @@
         "time_increment": 60,
         "agents": [0]
     },
-    "Architecture": {
-        "architecture_used": "Transformer",
+    "Actor Architecture": {
+        "architecture_used": "TransformerEncoder",
+        "v_net_architecture": "TransformerEncoder",
+        "q_net_architecture": "TransformerEncoder",
+        "q_net_mid_dim": 64,
         "architectures_available": [
             {
                 "name": "Transformer",
-                "aug_state_contains_actions": true,
+                "obs_has_actions": true,
                 "d_model": 512,
                 "max_len": 10,
-                "embed_dropout": 0.1,
-                "pos_dropout": 0.1,
                 "nhead": 8,
                 "num_encoder_layers": 1,
                 "num_decoder_layers": 1,
                 "dim_feedforward": 2048,
+                "embed_dropout": 0.1,
+                "pos_dropout": 0.1,
                 "transformer_dropout": 0.1,
+                "position_encoding": "segment",
                 "activation": "relu",
                 "batch_first": true,
-                "kaiming_init": false,
-                "critics_hidden_layers": [128, 128]
+                "kaiming_init": false
+            },
+            {
+                "name": "TransformerEncoder",
+                "obs_has_actions": false,
+                "d_model": 512,
+                "max_len": 10,
+                "nhead": 8,
+                "num_encoder_layers": 1,
+                "dim_feedforward": 2048,
+                "embed_dropout": 0.1,
+                "pos_dropout": 0.1,
+                "encoder_dropout": 0.1,
+                "position_encoding": "segment",
+                "activation": "relu",
+                "batch_first": true,
+                "kaiming_init": false
             },
             {
                 "name": "MLP",
-                "aug_state_contains_actions": false,
+                "obs_has_actions": false,
                 "max_len": 10,
                 "hidden_layers": [128, 128],
-                "dropout": 0.1,
-                "critics_hidden_layers": [128, 128]
+                "dropout": 0.1
             }
         ]
     },
     "Soft Actor-Critic": {
-        "version": "Original",
+        "algo_version": "Original",
         "replay_buffer_size": 1000000,
         "minimum_samples": 100,
         "batch_size": 64,
