@@ -217,7 +217,7 @@ class SoftActorCritic():
             raise ValueError("The version of the SAC algorithm is not recognized. Please try 'Original' or 'openAI'.")
         
         # Save the replay buffer
-        self.save_replay_buffer({"buffer": self.replay_buffer.storage._storage})
+        self.save_replay_buffer()
 
         # Plot the losses
         self.plot_losses(self.losses)
