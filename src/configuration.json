@@ -12,9 +12,9 @@
         "agents": [0]
     },
     "Actor Architecture": {
-        "architecture_used": "TransformerEncoder",
-        "v_net_architecture": "TransformerEncoder",
-        "q_net_architecture": "TransformerEncoder",
+        "architecture_used": "MLP",
+        "v_net_architecture": "MLP",
+        "q_net_architecture": "MLP",
         "q_net_mid_dim": 64,
         "architectures_available": [
             {
@@ -54,7 +54,7 @@
                 "name": "MLP",
                 "obs_has_actions": false,
                 "max_len": 10,
-                "hidden_layers": [128, 128],
+                "hidden_layers": [128],
                 "dropout": 0.1
             }
         ]
@@ -62,7 +62,7 @@
     "Soft Actor-Critic": {
         "algo_version": "Original",
         "replay_buffer_size": 1000000,
-        "minimum_samples": 100,
+        "minimum_samples": 1000,
         "batch_size": 64,
         "environment_steps": 5,
         "gradient_steps": 1,
@@ -72,7 +72,7 @@
         "lr_v": 1e-4,
         "lr_q": 1e-4,
         "lr_pi": 1e-5,
-        "smooth_coeff": 5e-3,
+        "smooth_coeff": 1e-4,
         "discount": 0.4,
         "temperature": 1.0
     }
