@@ -1,2 +1,5 @@
 # Soft Actor-Critic Algorithm for EOS Transformer
-Soft Actor-Critic algorithm implemented for a transformer-architecture Earth Observation Satellite (EOS) agent. Meant to be trained at Earth Gym, and code execution is run from there.
+![License](https://img.shields.io/badge/license-MIT-750014.svg)
+![py3comp](https://img.shields.io/badge/py3-compatible-306998.svg)
+
+Soft Actor-Critic algorithm to train Earth Observation Satellites (EOS) agents at [Earth Gym](https://github.com/seakers/earth-gym).
