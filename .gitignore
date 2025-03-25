@@ -6,3 +6,7 @@ __pycache__/
 
 # Plot files
 *.png
+
+# Code runner files
+src/run.sh
+*.log
